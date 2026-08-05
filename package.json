@@ -179,10 +179,12 @@
   },
   "scripts": {
     "lint": "node --check extension.js",
+    "test": "node test/smoke/run-smoke.js",
     "package": "vsce package --no-dependencies",
     "prepublishOnly": "npm run lint"
   },
   "devDependencies": {
+    "@vscode/test-electron": "^2.4.1",
     "@vscode/vsce": "^3.2.2"
   }
 }

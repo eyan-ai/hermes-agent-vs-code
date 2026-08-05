@@ -12,6 +12,7 @@
 - Fix: settings memory rows open the real Hermes docs (`~/.hermes/SOUL.md`, `~/.hermes/memories/USER.md`, `~/.hermes/memories/MEMORY.md`).
 - Fix: "Editor context is enabled" notice has a dismiss button.
 - Fix: thinking steps show a vertical timeline connecting dots; toggle expands/collapses and defaults to collapsed after a run; no pulse dot on the running label.
+- Add `npm test` E2E smoke harness (`test/smoke`) that runs the extension in the machine's real VS Code.
 
 ## 0.1.0
 
