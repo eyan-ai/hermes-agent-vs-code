@@ -111,9 +111,10 @@ function render() {
         ${renderPopovers()}
         ${renderComposer(running)}
       </section>
-    </div>`;
+  </div>`;
   bind();
   autosizePrompt();
+  updateQuestionOverflow();
 }
 
 function renderDiagnostics() {
@@ -128,6 +129,14 @@ function autosizePrompt() {
   prompt.style.height = "auto";
   const maxHeight = parseFloat(getComputedStyle(prompt).maxHeight);
   prompt.style.height = `${Math.min(prompt.scrollHeight, maxHeight)}px`;
+}
+
+function updateQuestionOverflow() {
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".question-frame").forEach(frame => {
+      frame.classList.toggle("fade-overflow", frame.scrollHeight > frame.clientHeight + 1);
+    });
+  });
 }
 
 function renderHero() {
