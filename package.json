@@ -1,0 +1,180 @@
+{
+  "name": "hermes-agent",
+  "displayName": "Hermes Agent",
+  "description": "Hermes Agent chat sidebar for VS Code with editor-aware context, workspace file references, skills, sessions, and approval modes.",
+  "version": "0.1.0",
+  "publisher": "hermes-agent",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "hermes",
+    "agent",
+    "chat",
+    "ai",
+    "vscode"
+  ],
+  "activationEvents": [
+    "onView:hermesAgent.sidebar",
+    "onCommand:hermesAgent.open",
+    "onCommand:hermesAgent.openEditorSession",
+    "onCommand:hermesAgent.newSession"
+  ],
+  "icon": "resources/nous-girl.png",
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hermesAgent",
+          "title": "Hermes Agent",
+          "icon": "resources/hermes.svg"
+        }
+      ]
+    },
+    "views": {
+      "hermesAgent": [
+        {
+          "id": "hermesAgent.sidebar",
+          "name": "Hermes Agent",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "hermesAgent.open",
+        "title": "Hermes Agent: Open"
+      },
+      {
+        "command": "hermesAgent.openEditorSession",
+        "title": "Hermes Agent: New Editor Session",
+        "icon": {
+          "light": "resources/nous-girl.png",
+          "dark": "resources/nous-girl.png"
+        }
+      },
+      {
+        "command": "hermesAgent.newSession",
+        "title": "Hermes Agent: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "hermesAgent.focusInput",
+        "title": "Hermes Agent: Focus Input"
+      }
+    ],
+    "configuration": {
+      "title": "Hermes Agent",
+      "properties": {
+        "hermesAgent.command": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional Hermes Agent CLI command. When empty, the extension uses a local mock streaming response."
+        },
+        "hermesAgent.commandArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "description": "Arguments passed to hermesAgent.command. The prompt is sent through stdin."
+        },
+        "hermesAgent.defaultMode": {
+          "type": "string",
+          "enum": [
+            "Manual",
+            "Auto"
+          ],
+          "default": "Auto",
+          "description": "Default approval mode for new sessions."
+        },
+        "hermesAgent.model": {
+          "type": "string",
+          "default": "5.5",
+          "description": "Default model label displayed in the run settings."
+        },
+        "hermesAgent.effort": {
+          "type": "string",
+          "enum": [
+            "Low",
+            "Medium",
+            "High"
+          ],
+          "default": "Medium",
+          "description": "Default reasoning effort label displayed in the run settings."
+        },
+        "hermesAgent.skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "default": [
+            {
+              "name": "Code Review",
+              "description": "Review code, specs, and diffs with product-quality attention."
+            },
+            {
+              "name": "Brainstorming",
+              "description": "Explore product and interaction options before implementation."
+            },
+            {
+              "name": "Ask Advisor",
+              "description": "Get an advisory second opinion from a local model CLI."
+            }
+          ],
+          "description": "Skills shown when the prompt starts with /."
+        }
+      }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "hermesAgent.newSession",
+          "when": "view == hermesAgent.sidebar",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "hermesAgent.openEditorSession",
+          "group": "navigation@9"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "hermesAgent.focusInput",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape",
+        "when": "activeWebviewPanelId == 'hermesAgent.sidebar'"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "node --check extension.js",
+    "package": "vsce package --no-dependencies",
+    "prepublishOnly": "npm run lint"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.2"
+  }
+}
