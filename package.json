@@ -5,6 +5,10 @@
   "version": "0.1.0",
   "publisher": "hermes-agent",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eyan-ai/hermes-agent-vs-code"
+  },
   "engines": {
     "vscode": "^1.94.0"
   },
