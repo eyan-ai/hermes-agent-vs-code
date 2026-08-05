@@ -1,9 +1,70 @@
 const vscode = require("vscode");
 const path = require("path");
+const os = require("os");
+const fs = require("fs");
 const { spawn } = require("child_process");
 
 const VIEW_ID = "hermesAgent.sidebar";
 const SESSION_KEY = "hermesAgent.sessions";
+
+const HERMES_HOME = path.join(os.homedir(), ".hermes");
+const HERMES_DOC_PATHS = {
+  "SOUL.md": path.join(HERMES_HOME, "SOUL.md"),
+  "USER.md": path.join(HERMES_HOME, "memories", "USER.md"),
+  "MEMORY.md": path.join(HERMES_HOME, "memories", "MEMORY.md")
+};
+
+let _hermesConfig = null;
+function hermesConfig() {
+  if (_hermesConfig) return _hermesConfig;
+  const result = { model: "", provider: "" };
+  try {
+    const lines = fs.readFileSync(path.join(HERMES_HOME, "config.yaml"), "utf8").split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!/^model:/.test(lines[index])) continue;
+      for (let next = index + 1; next < lines.length; next += 1) {
+        const line = lines[next];
+        if (/^\S/.test(line)) break;
+        const match = line.match(/^\s*(default|provider):\s*["']?([^"'\s]+)/);
+        if (match) result[match[1] === "default" ? "model" : match[1]] = match[2];
+      }
+    }
+  } catch { /* config absent — leave defaults */ }
+  _hermesConfig = result;
+  return result;
+}
+
+let _hermesModels = null;
+function hermesModels() {
+  if (_hermesModels) return _hermesModels;
+  const ids = [];
+  const seen = new Set();
+  const config = hermesConfig();
+  try {
+    const catalog = JSON.parse(fs.readFileSync(path.join(HERMES_HOME, "cache", "model_catalog.json"), "utf8"));
+    const providers = catalog.providers || {};
+    const push = models => {
+      for (const entry of models || []) {
+        const id = typeof entry === "string" ? entry : entry && entry.id;
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          ids.push(id);
+        }
+      }
+    };
+    // Current provider's models first, then the rest.
+    if (config.provider && providers[config.provider]) push(providers[config.provider].models);
+    for (const name of Object.keys(providers)) {
+      if (name !== config.provider) push(providers[name].models);
+    }
+  } catch { /* catalog absent */ }
+  if (config.model && !seen.has(config.model)) {
+    seen.add(config.model);
+    ids.unshift(config.model);
+  }
+  _hermesModels = ids;
+  return ids;
+}
 
 function activate(context) {
   const provider = new HermesSidebarProvider(context);
@@ -26,6 +87,12 @@ function activate(context) {
     vscode.window.onDidChangeActiveTextEditor(() => provider.refreshEditorContext()),
     vscode.window.onDidChangeTextEditorSelection(() => provider.refreshEditorContext())
   );
+  // A new window opened via openEditorSession asks the extension to auto-open
+  // the Hermes editor panel once it has finished starting up.
+  if (context.globalState.get("hermesAgent.openOnStartup")) {
+    context.globalState.update("hermesAgent.openOnStartup", false);
+    setTimeout(() => provider.openEditorPanel(), 900);
+  }
 }
 
 function deactivate() {}
@@ -94,6 +161,13 @@ class HermesSidebarProvider {
   }
 
   async openEditorSession() {
+    // The editor-title agent button opens a brand-new workbench window
+    // instead of a tab in the current window.
+    await this.context.globalState.update("hermesAgent.openOnStartup", true);
+    await vscode.commands.executeCommand("workbench.action.newWindow");
+  }
+
+  async openEditorPanel() {
     const session = await this.newSession();
     const panel = vscode.window.createWebviewPanel(
       "hermesAgent.editorSession",
@@ -240,18 +314,16 @@ class HermesSidebarProvider {
   async openMemoryDoc(file) {
     const allowed = new Set(["SOUL.md", "USER.md", "MEMORY.md"]);
     const name = allowed.has(file) ? file : "MEMORY.md";
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri || this.context.globalStorageUri;
-    const dir = vscode.Uri.joinPath(root, ".hermes");
-    const uri = vscode.Uri.joinPath(dir, name);
+    const filePath = HERMES_DOC_PATHS[name];
+    const uri = vscode.Uri.file(filePath);
     try {
-      await vscode.workspace.fs.createDirectory(dir);
-      try {
-        await vscode.workspace.fs.stat(uri);
-      } catch {
-        const title = name.replace(".md", "");
-        const body = `# ${title}\n\nEdit this file to shape Hermes Agent behavior and memory.\n`;
-        await vscode.workspace.fs.writeFile(uri, Buffer.from(body, "utf8"));
-      }
+      await vscode.workspace.fs.stat(uri);
+    } catch {
+      // First visit: create the real Hermes doc file with a header.
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(filePath)));
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(`# ${name.replace(/\.md$/, "")}\n\n`));
+    }
+    try {
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false });
     } catch (error) {
@@ -297,7 +369,6 @@ class HermesSidebarProvider {
     if (!Number.isInteger(index) || index < 0 || index >= source.messages.length) return;
     const user = source.messages[index];
     if (user?.role !== "user") return;
-    const next = source.messages[index + 1]?.role === "assistant" ? source.messages[index + 1] : null;
     const now = Date.now();
     const session = {
       id: id(),
@@ -305,7 +376,8 @@ class HermesSidebarProvider {
       createdAt: now,
       updatedAt: now,
       settings: { ...(source.settings || {}) },
-      messages: [cloneMessage(user), next ? cloneMessage(next) : null].filter(Boolean)
+      // Carry the whole history up to and including the fork point.
+      messages: source.messages.slice(0, index + 1).map(cloneMessage)
     };
     this.sessions.unshift(session);
     this.activeSessionId = session.id;
@@ -420,18 +492,20 @@ class HermesSidebarProvider {
   postState() {
     const config = vscode.workspace.getConfiguration("hermesAgent");
     const command = config.get("command", "");
-    const model = config.get("model", "5.5");
+    const model = config.get("model", "");
+    const models = hermesModels();
     this.post({
       type: "state",
       activeSessionId: this.activeSessionId,
       sessions: this.sessions,
       settings: {
         mode: config.get("defaultMode", "Auto"),
-        model,
+        model: model || hermesConfig().model || (models[0] || "5.5"),
         effort: config.get("effort", "Medium"),
         skills: config.get("skills", [])
       },
-      diagnostics: buildDiagnostics(command, model),
+      models,
+      diagnostics: buildDiagnostics(command, model || hermesConfig().model, models),
       editorContext: getEditorContext()
     });
   }
@@ -506,7 +580,7 @@ function cloneMessage(message) {
   return { ...JSON.parse(JSON.stringify(message)), id: id() };
 }
 
-function buildDiagnostics(command, model) {
+function buildDiagnostics(command, model, models = hermesModels()) {
   const diagnostics = [];
   if (!command) {
     diagnostics.push({
@@ -515,8 +589,7 @@ function buildDiagnostics(command, model) {
       message: "Hermes CLI is not configured. Responses are local previews until hermesAgent.command is set."
     });
   }
-  const supportedModels = new Set(["5.6 Sol", "5.6 Terra", "5.6 Luna", "5.5", "5.4", "5.4 Mini"]);
-  if (model && !supportedModels.has(model)) {
+  if (model && models.length > 0 && !models.includes(model)) {
     diagnostics.push({
       kind: "warning",
       title: "Model may be unavailable",

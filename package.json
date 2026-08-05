@@ -2,7 +2,7 @@
   "name": "hermes-agent",
   "displayName": "Hermes Agent",
   "description": "Hermes Agent chat sidebar for VS Code with editor-aware context, workspace file references, skills, sessions, and approval modes.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "hermes-agent",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,8 @@
     "onView:hermesAgent.sidebar",
     "onCommand:hermesAgent.open",
     "onCommand:hermesAgent.openEditorSession",
-    "onCommand:hermesAgent.newSession"
+    "onCommand:hermesAgent.newSession",
+    "onStartupFinished"
   ],
   "icon": "resources/nous-girl.png",
   "main": "./extension.js",

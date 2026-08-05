@@ -12,6 +12,7 @@ const state = {
   historyOpen: false,
   memoryOpen: false,
   titleEditing: false,
+  titleDraft: "",
   renamingSessionId: null,
   settingsOpen: false,
   contextOpen: false,
@@ -20,6 +21,9 @@ const state = {
   modifyingIndex: null,
   draft: "",
   historyQuery: "",
+  noticeDismissed: false,
+  openThinking: {},
+  models: [],
   settings: {
     mode: "Auto",
     model: "5.5",
@@ -82,6 +86,11 @@ function canSubmit() {
   return Boolean(state.draft.trim() || state.attachments.length || state.skill || currentContextAttachment());
 }
 
+function updateSend() {
+  const send = document.querySelector("#sendBtn");
+  if (send) send.classList.toggle("ready", state.running || canSubmit());
+}
+
 function render() {
   const session = activeSession();
   const messages = session.messages || [];
@@ -93,7 +102,7 @@ function render() {
         <button class="title-btn ${state.titleEditing ? "editing" : ""}" id="titleBtn" type="button">
           <span class="title-text">${h(session.title || "Untitled")}</span>
           <span class="title-edit">${icons.edit}</span>
-          <input class="title-input" id="titleInput" maxlength="64" value="${h(session.title || "Untitled")}">
+          <input class="title-input" id="titleInput" maxlength="64" value="${h(state.titleEditing ? state.titleDraft : (session.title || "Untitled"))}">
         </button>
         <div class="top-actions">
           <button class="icon-btn ${state.historyOpen ? "active" : ""}" id="historyBtn" type="button" title="History">${icons.history}</button>
@@ -108,7 +117,6 @@ function render() {
           ${renderDiagnostics()}
           ${messages.length ? renderThread(messages) : renderHero()}
         </div>
-        ${renderPopovers()}
         ${renderComposer(running)}
       </section>
   </div>`;
@@ -140,12 +148,19 @@ function updateQuestionOverflow() {
 }
 
 function renderHero() {
+  if (state.noticeDismissed) {
+    return `<div class="hero">
+      <img src="${iconUri}" alt="">
+      <h1>Hermes Agent</h1>
+      <p>Ask Hermes to understand, edit,<br>or explain your current code.</p>
+    </div>`;
+  }
   return `<div class="hero">
     <img src="${iconUri}" alt="">
     <h1>Hermes Agent</h1>
     <p>Ask Hermes to understand, edit,<br>or explain your current code.</p>
     <article class="notice">
-      <div class="notice-head">${icons.bolt}<span>Editor context is enabled</span></div>
+      <div class="notice-head">${icons.bolt}<span>Editor context is enabled</span><button class="notice-close" id="noticeClose" type="button" title="Dismiss" aria-label="Dismiss">×</button></div>
       <div class="notice-body">Hermes can use the active VS Code file or selected lines as context. Use <strong>@</strong> to add files and folders.</div>
     </article>
   </div>`;
@@ -218,12 +233,14 @@ function renderAssistant(message, index, messages) {
   const running = message.status === "running";
   const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
   const questionIndex = findQuestionIndex(messages, index);
+  const thinkingOpen = Boolean(state.openThinking[message.id]) || running;
+  const chevron = icons.chevron.replace("<svg", '<svg class="chev"');
   return `<div class="assistant">
     <div class="run-header">
-      <button class="thinking-toggle ${running ? "running" : ""}" type="button">${running ? "Thinking.." : `Worked for 0m ${worked}s`}</button>
+      <button class="thinking-toggle ${running ? "running" : ""} ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}">${running ? "Thinking" : `Worked for 0m ${worked}s`}${chevron}</button>
       <span>${h(state.settings.model)} ${h(state.settings.effort)}</span>
     </div>
-    <div class="thinking ${running ? "" : "collapsed"}">
+    <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
       ${(message.thinking || []).map(step => `<div class="step"><span class="dot ${step.kind === "success" ? "success" : step.kind === "error" ? "error" : ""}"></span><div><strong>${h(step.title)}</strong><div>${h(step.text)}</div></div></div>`).join("")}
     </div>
     <div class="answer">${h(message.text)}</div>
@@ -262,15 +279,22 @@ function renderPopovers() {
       <div class="popover-head"><span>Run settings</span></div>
       <div class="mode-panel">
         ${["Manual", "Auto"].map(mode => `<button class="mode-option ${state.settings.mode === mode ? "active" : ""}" data-mode="${mode}" type="button"><span>${mode === "Manual" ? "✋" : "⚡"}</span><span>${mode}</span><span>${state.settings.mode === mode ? "✓" : ""}</span></button>`).join("")}
-        <label class="settings-row"><span>Model</span><select class="mode-select" id="modelSelect">${["5.6 Sol","5.6 Terra","5.6 Luna","5.5","5.4","5.4 Mini"].map(model => `<option ${state.settings.model === model ? "selected" : ""}>${model}</option>`).join("")}</select></label>
-        <label class="settings-row"><span>Effort</span><select class="mode-select" id="effortSelect">${["Low","Medium","High"].map(effort => `<option ${state.settings.effort === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></label>
+        <label class="settings-row"><span>Model</span><select class="mode-select" id="modelSelect">${modelOptions()}</select></label>
+        <label class="settings-row"><span>Effort</span><select class="mode-select" id="effortSelect">${["Low", "Medium", "High"].map(effort => `<option ${state.settings.effort === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></label>
       </div>
     </div>`;
+}
+
+function modelOptions() {
+  const models = state.models && state.models.length ? state.models : [state.settings.model || "5.5"];
+  const current = state.settings.model;
+  return models.map(model => `<option ${current === model ? "selected" : ""}>${h(model)}</option>`).join("");
 }
 
 function renderComposer(running) {
   const context = currentContextAttachment();
   return `<div class="composer-wrap">
+    ${renderPopovers()}
     <div class="composer">
       <div class="composer-top ${state.attachments.length ? "visible" : ""}">
         ${state.attachments.map(item => `<span class="attachment" title="${h(item.name)}">${glyphFor(item.type)}<span class="attachment-name">${h(item.name)}</span><button class="history-action remove-attachment" data-path="${h(item.path)}" type="button">×</button></span>`).join("")}
@@ -293,15 +317,37 @@ function renderComposer(running) {
 function bind() {
   document.querySelector("#titleBtn")?.addEventListener("click", event => {
     event.stopPropagation();
+    if (!state.titleEditing) state.titleDraft = activeSession().title || "Untitled";
     state.titleEditing = true;
     render();
-    document.querySelector("#titleInput")?.focus();
+    const input = document.querySelector("#titleInput");
+    input?.focus();
+    input?.select();
+  });
+  document.querySelector("#titleInput")?.addEventListener("input", event => {
+    state.titleDraft = event.target.value;
   });
   document.querySelector("#titleInput")?.addEventListener("keydown", event => {
-    if (event.key === "Enter") {
+    if (event.key === "Escape" && !event.isComposing) {
       state.titleEditing = false;
-      vscode.postMessage({ type: "renameSession", id: state.activeSessionId, title: event.target.value });
+      render();
+    } else if (event.key === "Enter" && !event.isComposing) {
+      const title = state.titleDraft.trim() || "Untitled";
+      vscode.postMessage({ type: "renameSession", id: state.activeSessionId, title });
+      state.titleEditing = false;
+      render();
     }
+  });
+  document.querySelector("#noticeClose")?.addEventListener("click", () => {
+    state.noticeDismissed = true;
+    render();
+  });
+  document.querySelectorAll(".thinking-toggle").forEach(button => {
+    button.addEventListener("click", () => {
+      const id = button.dataset.mid;
+      state.openThinking[id] = !state.openThinking[id];
+      render();
+    });
   });
   document.querySelector("#historyBtn")?.addEventListener("click", event => {
     event.stopPropagation();
@@ -336,7 +382,7 @@ function bind() {
       }
     });
     item.querySelector(".history-rename")?.addEventListener("keydown", event => {
-      if (event.key === "Enter") vscode.postMessage({ type: "renameSession", id, title: event.target.value });
+      if (event.key === "Enter" && !event.isComposing) vscode.postMessage({ type: "renameSession", id, title: event.target.value });
     });
     item.querySelector(".delete-history")?.addEventListener("click", event => {
       event.stopPropagation();
@@ -421,6 +467,7 @@ function bind() {
     autosizePrompt();
     const value = event.target.value;
     state.draft = value;
+    updateSend();
     if (value.includes("@")) {
       const query = value.match(/@([^\s]*)$/)?.[1] || "";
       state.contextOpen = true;
@@ -446,17 +493,35 @@ function bind() {
     }
   });
   document.querySelector("#sendBtn")?.addEventListener("click", submit);
-  document.addEventListener("click", event => {
-    if (!event.target.closest(".history, #historyBtn")) state.historyOpen = false;
-    if (!event.target.closest(".memory-settings, #memoryBtn")) state.memoryOpen = false;
-    if (!event.target.closest(".popover, #modeBtn, #prompt")) {
-      state.contextOpen = false;
-      state.skillOpen = false;
-      state.settingsOpen = false;
-    }
-    if (state.titleEditing && !event.target.closest("#titleBtn")) state.titleEditing = false;
-  }, { once: true });
 }
+
+// Persistent outside-click handling: closes popovers, commits title edits.
+// Bound once at module level so it survives re-renders (unlike a per-render
+// { once: true } listener, which stopped working after its first fire).
+document.addEventListener("click", event => {
+  let changed = false;
+  if (!event.target.closest(".history, #historyBtn") && state.historyOpen) {
+    state.historyOpen = false;
+    changed = true;
+  }
+  if (!event.target.closest(".memory-settings, #memoryBtn") && state.memoryOpen) {
+    state.memoryOpen = false;
+    changed = true;
+  }
+  if (!event.target.closest(".popover, #modeBtn, #prompt") && (state.contextOpen || state.skillOpen || state.settingsOpen)) {
+    state.contextOpen = false;
+    state.skillOpen = false;
+    state.settingsOpen = false;
+    changed = true;
+  }
+  if (state.titleEditing && !event.target.closest("#titleBtn")) {
+    const title = state.titleDraft.trim() || "Untitled";
+    vscode.postMessage({ type: "renameSession", id: state.activeSessionId, title });
+    state.titleEditing = false;
+    changed = true;
+  }
+  if (changed) render();
+});
 
 function settingsChanged() {
   vscode.postMessage({ type: "settingsChanged", settings: state.settings });
@@ -491,6 +556,7 @@ window.addEventListener("message", event => {
     state.sessions = message.sessions || [];
     state.activeSessionId = message.activeSessionId;
     state.settings = { ...state.settings, ...(message.settings || {}) };
+    state.models = message.models || [];
     state.diagnostics = message.diagnostics || [];
     state.editorContext = message.editorContext;
     state.renamingSessionId = null;

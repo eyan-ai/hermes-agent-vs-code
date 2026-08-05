@@ -73,6 +73,8 @@ button { color: inherit; }
 .hero h1 { margin: 8px 0 0; font-size: 16px; line-height: 1.3; font-weight: 560; color: var(--muted); }
 .notice { width: min(100%, 292px); margin-top: 22px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--panel); text-align: left; overflow: hidden; }
 .notice-head { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); font-weight: 560; display: flex; gap: 8px; align-items: center; }
+.notice-close { margin-left: auto; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; font-size: 15px; line-height: 1; }
+.notice-close:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
 .notice-body { padding: 12px; color: var(--muted); line-height: 1.5; }
 .thread { display: grid; gap: 16px; }
 .message.user { display: flex; justify-content: flex-end; position: sticky; top: 0; z-index: 4; padding: 10px 0 16px; margin: -10px 0 2px; isolation: isolate; }
@@ -100,14 +102,15 @@ button { color: inherit; }
 .question-text { white-space: pre-wrap; overflow: hidden; font-size: 13px; line-height: 1.5; }
 .assistant { display: grid; gap: 10px; }
 .run-header { display: flex; align-items: center; justify-content: space-between; color: var(--muted); }
-.thinking-toggle { border: 0; background: transparent; color: var(--muted); padding: 0; display: inline-flex; gap: 8px; align-items: center; cursor: pointer; font-weight: 560; }
-.thinking-toggle.running::before { content: ""; width: 8px; height: 8px; border-radius: 99px; background: #9a9a9a; animation: pulse 1.25s ease-in-out infinite; }
-@keyframes pulse { 0%,100% { opacity: .42; transform: scale(.86); } 50% { opacity: 1; transform: scale(1); } }
-.thinking { display: grid; gap: 8px; border-left: 1px solid var(--border-soft); padding-left: 14px; color: color-mix(in srgb, var(--muted) 78%, var(--panel)); font-size: 12px; line-height: 1.55; }
+.thinking-toggle { border: 0; background: transparent; color: var(--muted); padding: 0; display: inline-flex; gap: 5px; align-items: center; cursor: pointer; font-weight: 560; }
+.thinking-toggle .chev { width: 12px; height: 12px; transition: transform .15s ease; }
+.thinking-toggle.open .chev { transform: rotate(90deg); }
+.thinking { position: relative; display: grid; gap: 8px; padding-left: 14px; color: color-mix(in srgb, var(--muted) 78%, var(--panel)); font-size: 12px; line-height: 1.55; }
+.thinking::before { content: ""; position: absolute; left: 5px; top: 10px; bottom: 10px; width: 1px; background: var(--border-soft); }
 .thinking.collapsed { display: none; }
 .step { display: grid; grid-template-columns: 12px 1fr; gap: 8px; align-items: start; }
 .step strong { color: color-mix(in srgb, var(--muted) 86%, var(--text)); font-size: 12px; font-weight: 600; }
-.dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 99px; background: #9a9a9a; }
+.dot { position: relative; z-index: 1; width: 9px; height: 9px; margin-top: 5px; border-radius: 99px; background: #9a9a9a; box-shadow: 0 0 0 3px var(--bg); }
 .dot.success { background: #65c98a; }
 .dot.error { background: #df675f; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: pre-wrap; }
@@ -140,10 +143,11 @@ button { color: inherit; }
 .toolbar { min-height: 44px; border-top: 1px solid var(--border-soft); padding: 7px 8px; display: flex; align-items: center; gap: 7px; }
 .tool-btn { height: 30px; min-width: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
 .tool-btn:hover { background: var(--primary-soft); color: var(--primary); }
+#modeBtn strong { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 560; }
 .context-strip { flex: 1; min-width: 0; display: flex; overflow: hidden; }
 .context-chip { max-width: 150px; display: inline-flex; gap: 6px; align-items: center; color: var(--muted); overflow: hidden; white-space: nowrap; border-radius: 6px; padding: 0 7px; height: 28px; cursor: pointer; }
 .context-chip:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
 .context-chip span { overflow: hidden; text-overflow: ellipsis; }
 .divider { width: 1px; height: 20px; background: var(--border-soft); }
-.send { width: 30px; height: 30px; border: 0; border-radius: 7px; background: color-mix(in srgb, var(--primary) 28%, white); color: white; display: grid; place-items: center; cursor: pointer; flex: 0 0 auto; }
-.send.ready, .send.stop { background: var(--primary); }
+.send { width: 30px; height: 30px; border: 0; border-radius: 7px; background: color-mix(in srgb, var(--primary) 28%, white); color: white; display: grid; place-items: center; flex: 0 0 auto; opacity: .5; cursor: default; }
+.send.ready, .send.stop { opacity: 1; cursor: pointer; background: var(--primary); }
