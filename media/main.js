@@ -196,7 +196,7 @@ function renderUser(message, index, messages) {
   const laterUser = messages.slice(index + 1).some(item => item.role === "user");
   return `<div class="message user">
     <div class="bubble ${textOnly ? "text-only" : ""}">
-      ${laterUser ? "" : `<button class="modify-btn" type="button" data-index="${index}" title="Modify">Modify</button>`}
+      ${laterUser ? "" : `<button class="modify-btn" type="button" data-index="${index}" title="Modify" aria-label="Modify">${icons.edit}</button>`}
       <div class="question-frame">
         ${attachments.length ? `<div class="attachments">${attachments.map(renderAttachment).join("")}</div>` : ""}
         <div class="question-text">${message.skill ? `<span class="question-skill">/${h(message.skill)}</span> ` : ""}${h(message.text)}</div>
@@ -219,8 +219,8 @@ function renderAssistant(message, index, messages) {
     </div>
     <div class="answer">${h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
-      <button class="answer-action copy-answer" type="button" data-index="${index}" title="Copy response">${icons.copy}<span>Copy</span></button>
-      ${questionIndex >= 0 ? `<button class="answer-action fork-answer" type="button" data-index="${questionIndex}" title="Fork from this question">${icons.branch}<span>Fork</span></button>` : ""}
+      <button class="answer-action copy-answer" type="button" data-index="${index}" title="Copy response" aria-label="Copy response">${icons.copy}</button>
+      ${questionIndex >= 0 ? `<button class="answer-action fork-answer" type="button" data-index="${questionIndex}" title="Fork from this question" aria-label="Fork from this question">${icons.branch}</button>` : ""}
     </div>` : ""}
   </div>`;
 }

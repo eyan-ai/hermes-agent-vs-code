@@ -80,7 +80,8 @@ button { color: inherit; }
 .bubble { width: fit-content; max-width: 100%; position: relative; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 46%, white); border-radius: 7px; background: var(--primary-soft); color: var(--text); line-height: 1.5; }
 .bubble.text-only { display: flex; align-items: center; min-height: 36px; }
 .question-frame { max-width: 100%; max-height: 76px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 68%, transparent 100%); mask-image: linear-gradient(to bottom, #000 0, #000 68%, transparent 100%); }
-.modify-btn { position: absolute; right: -10px; top: -10px; min-width: 44px; height: 22px; padding: 0 8px; border: 1px solid var(--border-soft); border-radius: 999px; background: var(--panel); color: var(--muted); box-shadow: 0 2px 10px rgba(0, 0, 0, .12); cursor: pointer; font-size: 11px; line-height: 20px; opacity: 0; transform: translateY(2px); transition: opacity .14s ease, transform .14s ease, color .14s ease, background .14s ease; }
+.modify-btn { position: absolute; right: -10px; top: -10px; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border-soft); border-radius: 999px; background: var(--panel); color: var(--muted); box-shadow: 0 2px 10px rgba(0, 0, 0, .12); cursor: pointer; display: grid; place-items: center; opacity: 0; transform: translateY(2px); transition: opacity .14s ease, transform .14s ease, color .14s ease, background .14s ease; }
+.modify-btn .icon { width: 11px; height: 11px; }
 .bubble:hover .modify-btn { opacity: 1; transform: translateY(0); }
 .modify-btn:hover { background: var(--primary-soft); color: var(--primary); }
 .question-skill { color: var(--primary); font-weight: 560; }
@@ -109,8 +110,8 @@ button { color: inherit; }
 .dot.success { background: #65c98a; }
 .dot.error { background: #df675f; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: pre-wrap; }
-.answer-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
-.answer-action { height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; cursor: pointer; font-size: 11px; }
+.answer-actions { display: flex; justify-content: flex-end; gap: 3px; margin-top: 2px; }
+.answer-action { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; padding: 0; cursor: pointer; }
 .answer-action .icon { width: 13px; height: 13px; }
 .answer-action:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
 
