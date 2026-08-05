@@ -146,6 +146,12 @@ class HermesSidebarProvider {
       case "sendPrompt":
         await this.sendPrompt(message);
         break;
+      case "forkFrom":
+        await this.forkFrom(message.index);
+        break;
+      case "copyAnswer":
+        await vscode.env.clipboard.writeText(String(message.text || ""));
+        break;
       case "stop":
         this.stop();
         break;
@@ -256,6 +262,9 @@ class HermesSidebarProvider {
   async sendPrompt(message) {
     const session = this.activeSession();
     const prompt = String(message.prompt || "");
+    if (Number.isInteger(message.replaceFromIndex) && message.replaceFromIndex >= 0) {
+      session.messages.splice(message.replaceFromIndex);
+    }
     const userMessage = {
       id: id(),
       role: "user",
@@ -281,6 +290,27 @@ class HermesSidebarProvider {
     await this.saveSessions();
     this.postState();
     await this.runAgent(prompt, userMessage, assistantMessage);
+  }
+
+  async forkFrom(index) {
+    const source = this.activeSession();
+    if (!Number.isInteger(index) || index < 0 || index >= source.messages.length) return;
+    const user = source.messages[index];
+    if (user?.role !== "user") return;
+    const next = source.messages[index + 1]?.role === "assistant" ? source.messages[index + 1] : null;
+    const now = Date.now();
+    const session = {
+      id: id(),
+      title: user.text ? user.text.slice(0, 64) : "Forked session",
+      createdAt: now,
+      updatedAt: now,
+      settings: { ...(source.settings || {}) },
+      messages: [cloneMessage(user), next ? cloneMessage(next) : null].filter(Boolean)
+    };
+    this.sessions.unshift(session);
+    this.activeSessionId = session.id;
+    await this.saveSessions();
+    this.postState();
   }
 
   async runAgent(prompt, userMessage, assistantMessage) {
@@ -470,6 +500,10 @@ function createSession(title) {
     settings: {},
     messages: []
   };
+}
+
+function cloneMessage(message) {
+  return { ...JSON.parse(JSON.stringify(message)), id: id() };
 }
 
 function buildDiagnostics(command, model) {

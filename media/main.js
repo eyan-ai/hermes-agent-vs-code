@@ -17,6 +17,7 @@ const state = {
   contextOpen: false,
   skillOpen: false,
   running: false,
+  modifyingIndex: null,
   draft: "",
   historyQuery: "",
   settings: {
@@ -40,6 +41,8 @@ const icons = {
   search: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   bolt: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m13 2-9 14h8l-1 6 9-14h-8z"/></svg>',
   gear: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-.6 1.8 1.8 0 0 0-1.98.36l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 .6-1 1.8 1.8 0 0 0-.36-1.98l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.8 1.8 0 0 0 9 4.6a1.8 1.8 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 .6 1.8 1.8 0 0 0 1.98-.36l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.8 1.8 0 0 0 19.4 9c.2.35.4.65.6 1h.1a2 2 0 1 1 0 4H20a1.8 1.8 0 0 0-.6 1Z"/></svg>',
+  copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  branch: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h3a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3"/><path d="M6 8v10"/></svg>',
   chevron: '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 4 4 4-4 4"/></svg>'
 };
 
@@ -184,21 +187,16 @@ function renderMemorySettings() {
 }
 
 function renderThread(messages) {
-  return `<div class="thread">${messages.map((message, index) => message.role === "user" ? renderUser(message, index) : renderAssistant(message)).join("")}</div>`;
+  return `<div class="thread">${messages.map((message, index) => message.role === "user" ? renderUser(message, index, messages) : renderAssistant(message, index, messages)).join("")}</div>`;
 }
 
-function renderUser(message, index) {
+function renderUser(message, index, messages) {
   const attachments = attachmentsForMessage(message);
   const textOnly = attachments.length === 0;
+  const laterUser = messages.slice(index + 1).some(item => item.role === "user");
   return `<div class="message user">
     <div class="bubble ${textOnly ? "text-only" : ""}">
-      <div class="message-tools">
-        <button class="rollback-btn" type="button">${icons.history}</button>
-        <div class="rollback-menu">
-          <button type="button" data-action="modify" data-index="${index}">Modify</button>
-          <button type="button" data-action="fork" data-index="${index}">Fork</button>
-        </div>
-      </div>
+      ${laterUser ? "" : `<button class="modify-btn" type="button" data-index="${index}" title="Modify">Modify</button>`}
       <div class="question-frame">
         ${attachments.length ? `<div class="attachments">${attachments.map(renderAttachment).join("")}</div>` : ""}
         <div class="question-text">${message.skill ? `<span class="question-skill">/${h(message.skill)}</span> ` : ""}${h(message.text)}</div>
@@ -207,9 +205,10 @@ function renderUser(message, index) {
   </div>`;
 }
 
-function renderAssistant(message) {
+function renderAssistant(message, index, messages) {
   const running = message.status === "running";
   const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
+  const questionIndex = findQuestionIndex(messages, index);
   return `<div class="assistant">
     <div class="run-header">
       <button class="thinking-toggle ${running ? "running" : ""}" type="button">${running ? "Thinking.." : `Worked for 0m ${worked}s`}</button>
@@ -219,7 +218,18 @@ function renderAssistant(message) {
       ${(message.thinking || []).map(step => `<div class="step"><span class="dot ${step.kind === "success" ? "success" : step.kind === "error" ? "error" : ""}"></span><div><strong>${h(step.title)}</strong><div>${h(step.text)}</div></div></div>`).join("")}
     </div>
     <div class="answer">${h(message.text)}</div>
+    ${message.text ? `<div class="answer-actions">
+      <button class="answer-action copy-answer" type="button" data-index="${index}" title="Copy response">${icons.copy}<span>Copy</span></button>
+      ${questionIndex >= 0 ? `<button class="answer-action fork-answer" type="button" data-index="${questionIndex}" title="Fork from this question">${icons.branch}<span>Fork</span></button>` : ""}
+    </div>` : ""}
   </div>`;
+}
+
+function findQuestionIndex(messages, assistantIndex) {
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return index;
+  }
+  return -1;
 }
 
 function renderAttachment(item) {
@@ -326,6 +336,28 @@ function bind() {
   });
   document.querySelectorAll(".attachment[data-uri]").forEach(button => {
     button.addEventListener("click", () => vscode.postMessage({ type: "openAttachment", attachment: { uri: button.dataset.uri } }));
+  });
+  document.querySelectorAll(".modify-btn").forEach(button => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.index);
+      const message = activeSession().messages?.[index];
+      if (!message) return;
+      state.modifyingIndex = index;
+      state.draft = message.text || "";
+      state.skill = message.skill || "";
+      state.attachments = [...(message.attachments || [])];
+      render();
+      document.querySelector("#prompt")?.focus();
+    });
+  });
+  document.querySelectorAll(".fork-answer").forEach(button => {
+    button.addEventListener("click", () => vscode.postMessage({ type: "forkFrom", index: Number(button.dataset.index) }));
+  });
+  document.querySelectorAll(".copy-answer").forEach(button => {
+    button.addEventListener("click", () => {
+      const message = activeSession().messages?.[Number(button.dataset.index)];
+      if (message?.text) vscode.postMessage({ type: "copyAnswer", text: message.text });
+    });
   });
   document.querySelector("#pickBtn")?.addEventListener("click", () => vscode.postMessage({ type: "pickLocal" }));
   document.querySelector("#modeBtn")?.addEventListener("click", () => {
@@ -435,11 +467,13 @@ function submit() {
     skill: state.skill,
     attachments: state.attachments,
     editorContext: currentContextAttachment(),
-    settings: state.settings
+    settings: state.settings,
+    replaceFromIndex: state.modifyingIndex
   });
   state.attachments = [];
   state.skill = "";
   state.draft = "";
+  state.modifyingIndex = null;
 }
 
 window.addEventListener("message", event => {
