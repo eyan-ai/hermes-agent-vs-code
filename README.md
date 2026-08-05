@@ -18,29 +18,18 @@ Hermes Agent is a VS Code sidebar chat extension prototype packaged as a publish
 
 ## Hermes CLI Integration
 
-By default, the extension uses a local mock streaming response so the UI can be installed and tested immediately.
-
-To connect a real Hermes Agent runtime, configure:
+By default, the extension calls the local Hermes CLI:
 
 ```json
 {
   "hermesAgent.command": "hermes",
-  "hermesAgent.commandArgs": ["agent", "run"]
+  "hermesAgent.commandArgs": ["--oneshot", "{{prompt}}"]
 }
 ```
 
-The extension sends a JSON payload to stdin:
+The extension composes the user prompt, selected skill, attachments, and current editor context into one text prompt, then replaces `{{prompt}}` in `hermesAgent.commandArgs`.
 
-```json
-{
-  "prompt": "user prompt",
-  "skill": "optional skill",
-  "attachments": [],
-  "editorContext": {}
-}
-```
-
-Anything written to stdout is streamed into the assistant message.
+Anything written to stdout is appended into the assistant message. If `hermesAgent.command` is empty, the extension falls back to a local preview response.
 
 ## Development
 

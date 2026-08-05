@@ -321,15 +321,16 @@ class HermesSidebarProvider {
 
   async runCli(command, args, prompt, userMessage, assistantMessage) {
     const session = this.activeSession();
-    const payload = JSON.stringify({
-      prompt,
-      skill: userMessage.skill,
-      attachments: userMessage.attachments,
-      editorContext: userMessage.editorContext
-    });
+    const composedPrompt = composeHermesPrompt(prompt, userMessage);
+    const invocationArgs = buildInvocationArgs(args, composedPrompt);
+    const usesPromptPlaceholder = invocationArgs.usedPlaceholder;
     await new Promise(resolve => {
-      const child = spawn(command, args, {
+      const child = spawn(command, invocationArgs.args, {
         cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+        env: {
+          ...process.env,
+          HERMES_ACCEPT_HOOKS: "1"
+        },
         shell: process.platform === "win32"
       });
       this.runningProcess = child;
@@ -364,7 +365,7 @@ class HermesSidebarProvider {
         this.runningProcess = undefined;
         this.saveSessions().then(() => this.postState()).then(resolve);
       });
-      child.stdin.end(payload);
+      child.stdin.end(usesPromptPlaceholder ? "" : composedPrompt);
     });
   }
 
@@ -489,6 +490,51 @@ function buildDiagnostics(command, model) {
     });
   }
   return diagnostics;
+}
+
+function buildInvocationArgs(args, prompt) {
+  const configured = Array.isArray(args) ? args : [];
+  let usedPlaceholder = false;
+  const resolved = configured.map(arg => {
+    if (typeof arg !== "string") return String(arg);
+    if (arg.includes("{{prompt}}")) {
+      usedPlaceholder = true;
+      return arg.replaceAll("{{prompt}}", prompt);
+    }
+    return arg;
+  });
+  if (!usedPlaceholder && resolved.length === 0) {
+    return {
+      args: ["--oneshot", prompt],
+      usedPlaceholder: true
+    };
+  }
+  return { args: resolved, usedPlaceholder };
+}
+
+function composeHermesPrompt(prompt, userMessage) {
+  const parts = [];
+  if (userMessage.skill) {
+    parts.push(`Skill: ${userMessage.skill}`);
+  }
+  const contextLines = [];
+  for (const attachment of userMessage.attachments || []) {
+    contextLines.push(`- ${attachment.type || "file"}: ${attachment.path || attachment.name || attachment.uri}`);
+  }
+  if (userMessage.editorContext) {
+    const context = userMessage.editorContext;
+    contextLines.push(`- current ${context.type || "file"}: ${context.path || context.name || context.uri}`);
+    if (context.text) {
+      contextLines.push("");
+      contextLines.push("Selected text:");
+      contextLines.push(context.text);
+    }
+  }
+  if (contextLines.length) {
+    parts.push(`Context:\n${contextLines.join("\n")}`);
+  }
+  parts.push(`User request:\n${prompt || "(No text prompt. Use the provided context.)"}`);
+  return parts.join("\n\n");
 }
 
 function id() {

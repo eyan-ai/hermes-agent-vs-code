@@ -74,18 +74,21 @@
       "properties": {
         "hermesAgent.command": {
           "type": "string",
-          "default": "",
+          "default": "hermes",
           "scope": "machine",
-          "description": "Optional Hermes Agent CLI command. When empty, the extension uses a local mock streaming response."
+          "description": "Hermes Agent CLI command. When empty, the extension uses a local mock streaming response."
         },
         "hermesAgent.commandArgs": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "default": [],
+          "default": [
+            "--oneshot",
+            "{{prompt}}"
+          ],
           "scope": "machine",
-          "description": "Arguments passed to hermesAgent.command. The prompt is sent through stdin."
+          "description": "Arguments passed to hermesAgent.command. Use {{prompt}} where the composed prompt should be inserted. Default uses Hermes one-shot mode for clean final output."
         },
         "hermesAgent.defaultMode": {
           "type": "string",
