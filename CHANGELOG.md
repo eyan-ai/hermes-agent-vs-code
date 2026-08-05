@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Assistant answers are now rendered as Markdown: heading hierarchy (h1-h6), bold/italic/strikethrough, ordered and unordered lists, blockquotes, inline and fenced code blocks, and external links (opened via the system browser). Rendering is whitelist-only — raw HTML in answers is escaped.
+
 ## 0.2.0
 
 - Fix: title editing no longer loses input (IME-safe), commits on Enter or click-outside, Escape cancels.

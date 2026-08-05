@@ -226,6 +226,11 @@ class HermesSidebarProvider {
       case "copyAnswer":
         await vscode.env.clipboard.writeText(String(message.text || ""));
         break;
+      case "openLink": {
+        const url = String(message.url || "");
+        if (/^https?:\/\//i.test(url)) await vscode.env.openExternal(vscode.Uri.parse(url));
+        break;
+      }
       case "stop":
         this.stop();
         break;
@@ -512,6 +517,7 @@ class HermesSidebarProvider {
 
   html(webview) {
     const nonce = id();
+    const markdownUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "markdown.js"));
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "main.js"));
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "styles.css"));
     const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "resources", "nous-girl.png"));
@@ -526,6 +532,7 @@ class HermesSidebarProvider {
 </head>
 <body data-icon="${iconUri}">
   <div id="app"></div>
+  <script nonce="${nonce}" src="${markdownUri}"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

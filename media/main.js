@@ -243,7 +243,7 @@ function renderAssistant(message, index, messages) {
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
       ${(message.thinking || []).map(step => `<div class="step"><span class="dot ${step.kind === "success" ? "success" : step.kind === "error" ? "error" : ""}"></span><div><strong>${h(step.title)}</strong><div>${h(step.text)}</div></div></div>`).join("")}
     </div>
-    <div class="answer">${h(message.text)}</div>
+    <div class="answer">${window.markdownToHtml ? window.markdownToHtml(message.text) : h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
       <button class="answer-action copy-answer" type="button" data-index="${index}" title="Copy response" aria-label="Copy response">${icons.copy}</button>
       ${questionIndex >= 0 ? `<button class="answer-action fork-answer" type="button" data-index="${questionIndex}" title="Fork from this question" aria-label="Fork from this question">${icons.branch}</button>` : ""}
@@ -499,6 +499,12 @@ function bind() {
 // Bound once at module level so it survives re-renders (unlike a per-render
 // { once: true } listener, which stopped working after its first fire).
 document.addEventListener("click", event => {
+  const link = event.target.closest("a[data-href]");
+  if (link) {
+    event.preventDefault();
+    vscode.postMessage({ type: "openLink", url: link.dataset.href });
+    return;
+  }
   let changed = false;
   if (!event.target.closest(".history, #historyBtn") && state.historyOpen) {
     state.historyOpen = false;
