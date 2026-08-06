@@ -82,8 +82,8 @@ button { color: inherit; }
 .notice-body { padding: 12px; color: var(--muted); line-height: 1.5; }
 .thread { display: grid; gap: 10px; }
 .message.user { display: flex; justify-content: flex-end; position: sticky; top: 0; z-index: 4; padding: 6px 0 10px; margin: -6px 0 2px; isolation: isolate; }
-.message.user::before { content: ""; position: absolute; left: -21px; right: -21px; top: -12px; bottom: 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 78%, transparent 100%); }
-.bubble { width: fit-content; max-width: 100%; position: relative; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 46%, white); border-radius: 7px; background: var(--primary-soft); color: var(--text); line-height: 1.5; }
+.message.user::before { content: ""; position: absolute; left: -21px; right: -21px; top: -12px; bottom: 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 82%, transparent 100%); opacity: .9; }
+.bubble { width: fit-content; max-width: 100%; position: relative; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 38%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--text); line-height: 1.5; }
 .bubble.text-only { display: flex; align-items: center; min-height: 36px; }
 .question-frame { max-width: 100%; max-height: 76px; overflow: hidden; }
 .question-frame.fade-overflow { -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 74%, transparent 100%); mask-image: linear-gradient(to bottom, #000 0, #000 74%, transparent 100%); }
@@ -142,7 +142,7 @@ button { color: inherit; }
 .io-block { margin: 4px 0 2px; }
 .io-label { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px; color: var(--primary); border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 4px; padding: 0 5px; margin-bottom: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .io-block .code-sample { margin-top: 2px; }
-.code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid var(--border-soft); background: color-mix(in srgb, var(--panel) 88%, var(--text)); color: color-mix(in srgb, var(--text) 82%, var(--panel)); overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid light-dark(rgba(0,0,0,.08), rgba(255,255,255,.08)); background: light-dark(#f4f5f7, #1d1f22); color: light-dark(#3a3f47, #c9d1d9); overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: normal; word-break: break-word; }
 .answer > :first-child { margin-top: 0; }
 .answer h1, .answer h2, .answer h3, .answer h4, .answer h5, .answer h6 { margin: 16px 0 6px; line-height: 1.35; font-weight: 650; }
@@ -154,9 +154,9 @@ button { color: inherit; }
 .answer strong { font-weight: 650; }
 .answer ul, .answer ol { margin: 7px 0; padding-left: 20px; }
 .answer li { margin: 3px 0; }
-.answer code { border-radius: 5px; background: color-mix(in srgb, var(--text) 9%, transparent); padding: 1px 5px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.answer pre { margin: 9px 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--text) 7%, transparent); overflow-x: auto; }
-.answer pre code { background: transparent; padding: 0; font-size: 12px; }
+.answer code { border-radius: 5px; background: light-dark(rgba(0,0,0,.06), rgba(255,255,255,.09)); padding: 1px 5px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: inherit; }
+.answer pre { margin: 9px 0; padding: 10px 12px; border-radius: 8px; background: light-dark(#f4f5f7, #1d1f22); border: 1px solid light-dark(rgba(0,0,0,.08), rgba(255,255,255,.08)); overflow-x: auto; color: light-dark(#3a3f47, #c9d1d9); }
+.answer pre code { background: transparent; padding: 0; font-size: 12px; color: inherit; }
 .answer blockquote { margin: 8px 0; padding: 1px 0 1px 12px; border-left: 3px solid var(--border-soft); color: var(--muted); }
 .answer a { color: var(--primary); cursor: pointer; text-decoration: none; }
 .answer a:hover { text-decoration: underline; }
@@ -175,8 +175,8 @@ button { color: inherit; }
 
 .composer-wrap { position: absolute; left: 21px; right: 21px; bottom: 14px; z-index: 20; }
 /* Fade mask: content scrolling under the composer softens out instead of
-   colliding with the input — the reply never visually spills past it. */
-.composer-wrap::before { content: ""; position: absolute; left: -21px; right: -21px; bottom: 100%; height: 48px; background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
+   colliding with the input — subtle in both themes, no visible tint. */
+.composer-wrap::before { content: ""; position: absolute; left: -21px; right: -21px; bottom: 100%; height: 40px; background: linear-gradient(transparent, color-mix(in srgb, var(--panel) 55%, transparent)); pointer-events: none; opacity: .85; }
 /* Approval popup: rises from the composer (input line) upward. */
 .permission-popup { position: absolute; left: 0; right: 0; bottom: calc(100% + 12px); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; z-index: 30; display: grid; gap: 8px; }
 .permission-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
@@ -219,7 +219,7 @@ button { color: inherit; }
 .mini-btn { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-weight: 400; }
 .mini-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .mode-label { font-weight: 400; }
-.composer { background: var(--vscode-input-background, #fff); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
+.composer { background: light-dark(var(--vscode-input-background, #fff), #2a2a2a); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--primary) 78%, white); }
 .composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .composer-top::-webkit-scrollbar { display: none; }
