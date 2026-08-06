@@ -41,7 +41,11 @@ button { color: inherit; }
 .history-list { display: grid; gap: 3px; max-height: 332px; overflow: auto; padding: 0 10px; }
 .history-item { min-height: 34px; border-radius: 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 0 10px; font-size: 14px; font-weight: 400; color: var(--muted); }
 .history-item:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
-.history-item.active { background: color-mix(in srgb, var(--primary) 22%, light-dark(#fff, #000)); color: var(--text); }
+.history-item.active { background: var(--primary); color: #fff; }
+.history-item.active .history-name { color: #fff; }
+.history-item.active .history-age { color: rgba(255, 255, 255, .75); }
+.history-item.active .history-action { color: rgba(255, 255, 255, .85); }
+.history-item.active .history-action:hover { background: rgba(255, 255, 255, .18); color: #fff; }
 .history-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
 .history-age { color: var(--muted); font-weight: 400; }
 .history-actions { display: none; gap: 4px; }
@@ -207,7 +211,9 @@ button { color: inherit; }
 .mode-picker { display: grid; gap: 4px; margin-bottom: 8px; }
 .approval-option { display: grid; grid-template-columns: 30px 1fr 18px; gap: 8px; align-items: center; min-height: 58px; width: 100%; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; padding: 7px 8px; cursor: pointer; }
 .approval-option > span:first-child { font-size: 18px; line-height: 1; color: inherit; }
-.approval-option:hover, .approval-option.active { background: color-mix(in srgb, var(--primary) 12%, light-dark(#fff, #000)); }
+.approval-option:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.approval-option.active { background: var(--primary); color: #fff; }
+.approval-option.active strong, .approval-option.active > span:nth-child(2) > span { color: #fff; }
 .approval-option strong { display: block; font-size: 13px; line-height: 17px; color: inherit; font-weight: 600; }
 .approval-option > span:nth-child(2) > span { display: block; margin-top: 2px; font-size: 12px; line-height: 15px; color: var(--muted); font-weight: 400; }
 .settings-row { width: 100%; min-height: 38px; border: 0; border-radius: 7px; background: transparent; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 0 8px; color: var(--text); font-size: 13px; font-weight: 400; text-align: left; cursor: pointer; }

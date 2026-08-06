@@ -238,6 +238,14 @@ class HermesSidebarProvider {
         this.activeSessionId = message.id;
         await this.saveSessions();
         this.postState();
+        // Re-sync the server-generated title for a previously-open session
+        // (the AI title may have been generated after we last saw it).
+        {
+          const selected = this.sessions.find(s => s.id === message.id);
+          if (selected && selected.acpSessionId) {
+            this.syncAcpTitle(selected.acpSessionId, selected.id);
+          }
+        }
         break;
       case "renameSession":
         await this.renameSession(message.id, message.title);
@@ -482,6 +490,9 @@ class HermesSidebarProvider {
       const created = await client.request("session/new", { cwd: this.workspaceCwd(), mcpServers: [] });
       acpSessionId = created.sessionId;
       this.acpSessions.set(session.id, acpSessionId);
+      // Persist the mapping so reopening this session later can re-sync
+      // the server-generated title from state.db.
+      session.acpSessionId = acpSessionId;
     }
 
     // Per-session renderer: ACP updates → thinking steps / answer chunks.
@@ -511,8 +522,38 @@ class HermesSidebarProvider {
       renderer.finalize(finishReason && finishReason.stopReason === "refusal" ? "failed" : "done");
     }
     this.acpRenderers.delete(acpSessionId);
+    // The server generates the AI title asynchronously (up to ~30s) and
+    // notifies via session_info_update. Actively re-read the title from
+    // Hermes' state.db a bit later so the topbar gets the real title even
+    // if the notification was missed or the auxiliary titler is flaky.
+    const acpId = acpSessionId;
+    const uiId = session.id;
+    setTimeout(() => this.syncAcpTitle(acpId, uiId), 12000);
     await this.saveSessions();
     this.postState();
+  }
+
+  /** Best-effort: pull the server-generated session title from state.db. */
+  async syncAcpTitle(acpSessionId, uiSessionId) {
+    try {
+      const { execFile } = require("child_process");
+      const dbPath = path.join(HERMES_HOME, "state.db");
+      const sql = `SELECT title FROM sessions WHERE id = '${String(acpSessionId).replace(/'/g, "''")}' LIMIT 1;`;
+      const title = await new Promise((resolve, reject) => {
+        execFile("sqlite3", [dbPath, sql], { timeout: 8000 }, (err, stdout) => {
+          if (err) return reject(err);
+          resolve(String(stdout || "").trim());
+        });
+      });
+      if (!title || title === "Untitled") return;
+      const session = this.sessions.find(s => s.id === uiSessionId);
+      if (session && session.title !== title) {
+        session.title = title;
+        session.updatedAt = Date.now();
+        await this.saveSessions();
+        this.postState();
+      }
+    } catch { /* state.db read is best-effort; the notification path may still deliver */ }
   }
 
   /** Lazily spawn `hermes acp` once and wire the session/update handler. */
@@ -635,17 +676,19 @@ class HermesSidebarProvider {
   }
 
   /**
-   * Highlight an edit proposal in the open document: removed lines red,
-   * added lines green (in-place review before approving). Cleared when the
-   * user answers.
+   * Highlight an edit proposal in the open document (in-place preview):
+   * - Removed/old lines get a red background (only the lines being changed)
+   * - The new content previews inline after the changed lines, green
+   * This is a PURE PREVIEW — the file is not modified until the user
+   * approves. Cleared when the user answers.
    */
   showDocDiff(diff) {
     this.clearDocDiff();
     if (!diff) return;
-    const oldText = diff.oldText || diff.old_text || "";
-    const newText = diff.newText || diff.new_text || "";
+    const oldText = String(diff.oldText || diff.old_text || "");
+    const newText = String(diff.newText || diff.new_text || "");
     const file = diff.path || diff.file || "";
-    if (!file) return;
+    if (!file || (!oldText && !newText)) return;
     let uri;
     try {
       uri = vscode.Uri.file(file);
@@ -655,50 +698,90 @@ class HermesSidebarProvider {
     const editor = vscode.window.visibleTextEditors.find(ed => ed.document.uri.fsPath === uri.fsPath);
     if (!editor) return;
     const doc = editor.document;
-    const oldLines = String(oldText).split("\n");
-    const newLines = String(newText).split("\n");
+    const full = doc.getText();
     const removedRanges = [];
-    const addedRanges = [];
-    for (let i = 0; i < Math.max(oldLines.length, newLines.length); i += 1) {
-      const oldLine = oldLines[i];
-      const newLine = newLines[i];
-      if (oldLine !== undefined && newLine !== undefined && oldLine !== newLine) {
-        // Replaced line: red over the old content, green for the new.
-        const lineIdx = i;
-        if (lineIdx < doc.lineCount) {
-          removedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
-          addedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
+    const addedAfter = [];
+    if (oldText) {
+      // Locate the OLD text in the document — the diff's own line indexing
+      // must not be used as document line numbers.
+      const start = full.indexOf(oldText);
+      if (start >= 0) {
+        const startLine = doc.positionAt(start).line;
+        const oldLines = oldText.split("\n");
+        const newLines = newText.split("\n");
+        for (let i = 0; i < oldLines.length; i += 1) {
+          const lineIdx = startLine + i;
+          if (lineIdx < doc.lineCount) {
+            // Red: the line being replaced/removed, exactly this line only.
+            const len = doc.lineAt(lineIdx).text.length;
+            removedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, len));
+            // Green preview of the replacement text appended after the line.
+            const replacement = newLines[i] !== undefined ? newLines[i] : "";
+            if (replacement !== "" && replacement !== oldLines[i]) {
+              addedAfter.push({ line: lineIdx, text: replacement });
+            }
+          }
         }
-      } else if (oldLine !== undefined && newLine === undefined) {
-        const lineIdx = i;
-        if (lineIdx < doc.lineCount) {
-          removedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
-        }
-      } else if (oldLine === undefined && newLine !== undefined) {
-        const lineIdx = i;
-        if (lineIdx < doc.lineCount) {
-          addedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
+        // Extra new lines (insertions) preview after the last old line.
+        const extra = newLines.slice(oldLines.length);
+        if (extra.length && startLine + oldLines.length - 1 < doc.lineCount) {
+          addedAfter.push({ line: startLine + oldLines.length - 1, text: extra.join("\n") });
         }
       }
+    } else if (newText) {
+      // Pure insertion: preview after the current line.
+      const pos = editor.selection.active;
+      addedAfter.push({ line: pos.line, text: newText.split("\n").join(" ") });
     }
     this.docDiffDecorations = [];
     if (removedRanges.length) {
       const del = vscode.window.createTextEditorDecorationType({
-        backgroundColor: "rgba(224, 100, 95, .28)",
+        backgroundColor: "rgba(224, 100, 95, .25)",
         isWholeLine: true,
         overviewRulerColor: "rgba(224, 100, 95, .6)"
       });
       editor.setDecorations(del, removedRanges);
       this.docDiffDecorations.push(del);
     }
-    if (addedRanges.length) {
+    if (addedAfter.length) {
+      // Inline green preview: "⟶ new content" appended to the changed lines.
       const add = vscode.window.createTextEditorDecorationType({
-        backgroundColor: "rgba(100, 201, 136, .28)",
-        isWholeLine: true,
-        overviewRulerColor: "rgba(100, 201, 136, .6)"
+        after: {
+          contentText: " ⟶ ",
+          color: "rgba(100, 201, 136, .9)"
+        }
       });
-      editor.setDecorations(add, addedRanges);
+      const addText = vscode.window.createTextEditorDecorationType({
+        after: {
+          color: "rgba(100, 201, 136, .9)",
+          backgroundColor: "rgba(100, 201, 136, .16)"
+        }
+      });
+      const arrowRanges = [];
+      const textRanges = [];
+      for (const item of addedAfter) {
+        const end = doc.lineAt(item.line).range.end;
+        arrowRanges.push(new vscode.Range(end, end));
+        textRanges.push(new vscode.Range(end, end));
+      }
+      // contentText can't differ per range on one decoration type; use the
+      // arrow decoration + per-range after text via one type per line.
+      editor.setDecorations(add, arrowRanges);
       this.docDiffDecorations.push(add);
+      for (let i = 0; i < addedAfter.length; i += 1) {
+        const item = addedAfter[i];
+        const end = doc.lineAt(item.line).range.end;
+        const t = vscode.window.createTextEditorDecorationType({
+          after: {
+            contentText: item.text.replace(/\n/g, " "),
+            color: "rgba(100, 201, 136, .9)",
+            backgroundColor: "rgba(100, 201, 136, .16)"
+          }
+        });
+        editor.setDecorations(t, [new vscode.Range(end, end)]);
+        this.docDiffDecorations.push(t);
+      }
+      this.docDiffDecorations.push(addText);
     }
   }
 

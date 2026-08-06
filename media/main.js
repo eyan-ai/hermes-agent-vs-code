@@ -623,12 +623,14 @@ function bind() {
   document.querySelectorAll(".approval-option").forEach(button => {
     button.addEventListener("click", () => {
       state.settings.mode = button.dataset.mode;
+      state.settingsOpen = false;
       settingsChanged();
       render();
     });
   });
   document.querySelector("#resetMode")?.addEventListener("click", () => {
     state.settings.mode = "Auto";
+    state.settingsOpen = false;
     settingsChanged();
     render();
   });
