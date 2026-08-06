@@ -128,7 +128,8 @@ button { color: inherit; }
 .timeline-body p { margin: 0; color: var(--muted); white-space: pre-wrap; }
 .timeline-body .code-sample { margin: 6px 0 2px; }
 .step-row { width: 100%; border: 0; background: transparent; padding: 2px 0; display: flex; align-items: center; gap: 0; text-align: left; cursor: default; color: var(--text); border-radius: 4px; font: inherit; }
-.step-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; font-weight: 500; }
+.step-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; font-weight: 500; color: var(--muted); transition: color .12s; }
+.step-row:hover .step-summary { color: var(--text); }
 .step-badge { color: #64c988; font-weight: 700; font-size: 12px; flex: 0 0 auto; margin-left: 6px; }
 .step-badge.error { color: #e0645f; }
 /* Caret sits right after the title text (like "Thinking›"), always visible
@@ -176,6 +177,22 @@ button { color: inherit; }
 /* Fade mask: content scrolling under the composer softens out instead of
    colliding with the input — the reply never visually spills past it. */
 .composer-wrap::before { content: ""; position: absolute; left: -21px; right: -21px; bottom: 100%; height: 48px; background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
+/* Approval popup: rises from the composer (input line) upward. */
+.permission-popup { position: absolute; left: 0; right: 0; bottom: calc(100% + 12px); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; z-index: 30; display: grid; gap: 8px; }
+.permission-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.permission-head .icon { width: 14px; height: 14px; color: var(--primary); }
+.permission-path { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); word-break: break-all; }
+.diff-view { border: 1px solid var(--border-soft); border-radius: 7px; overflow: hidden; max-height: 220px; overflow-y: auto; }
+.diff-line { display: flex; gap: 6px; padding: 2px 8px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.diff-sign { flex: 0 0 auto; font-weight: 700; }
+.diff-del { background: rgba(224, 100, 95, .14); color: #e0645f; }
+.diff-add { background: rgba(100, 201, 136, .14); color: #4caf7f; }
+.permission-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.permission-btn { border: 0; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; font-weight: 500; }
+.permission-btn.allow { background: var(--primary); color: #fff; }
+.permission-btn.allow:hover { filter: brightness(1.08); }
+.permission-btn.deny { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.permission-btn.deny:hover { color: #e0645f; border-color: #e0645f; }
 .popover { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); display: none; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 9px; box-shadow: var(--shadow); overflow: hidden; z-index: 5; }
 .popover.open { display: block; }
 #modePopover { left: auto; right: 0; width: 300px; }
@@ -202,7 +219,7 @@ button { color: inherit; }
 .mini-btn { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-weight: 400; }
 .mini-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .mode-label { font-weight: 400; }
-.composer { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
+.composer { background: var(--vscode-input-background, #fff); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--primary) 78%, white); }
 .composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .composer-top::-webkit-scrollbar { display: none; }

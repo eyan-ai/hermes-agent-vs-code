@@ -252,6 +252,24 @@ class HermesSidebarProvider {
       case "copyAnswer":
         await vscode.env.clipboard.writeText(String(message.text || ""));
         break;
+      case "permissionResponse": {
+        // User answered the approval popup: allow (select allow_once) or deny.
+        const pending = this.pendingPermission;
+        this.pendingPermission = undefined;
+        if (pending && this.acp && message.requestId === pending.request.id) {
+          if (message.allow) {
+            const options = (pending.request.params?.options) || [];
+            const allow = options.find(option => option.optionId === "allow_once" || option.optionId === "allow");
+            this.acp.respond(pending.request.id, {
+              outcome: "selected",
+              optionId: allow ? allow.optionId : "allow_once"
+            });
+          } else {
+            this.acp.respond(pending.request.id, { outcome: "cancelled" });
+          }
+        }
+        break;
+      }
       case "openLink": {
         const url = String(message.url || "");
         if (/^https?:\/\//i.test(url)) await vscode.env.openExternal(vscode.Uri.parse(url));
@@ -459,6 +477,19 @@ class HermesSidebarProvider {
     const renderer = createAcpRenderer({ assistantMessage, post: msg => this.post(msg), session });
     this.acpRenderers.set(acpSessionId, renderer);
 
+    // Sync the approval mode to the ACP server: Auto = fully autonomous
+    // (dont_ask policy auto-approves edits inside the workspace), Manual =
+    // ask. Without this the server keeps its own default (ask) and Auto
+    // never actually auto-executes.
+    const settings = session.settings || {};
+    const mode = settings.mode || "Auto";
+    try {
+      await client.request("session/set_mode", {
+        sessionId: acpSessionId,
+        modeId: mode === "Auto" ? "dont_ask" : "default"
+      });
+    } catch { /* mode sync is best-effort; approval still works via the popup */ }
+
     const composed = composeHermesPrompt(prompt, userMessage);
     const finishReason = await client.request("session/prompt", {
       sessionId: acpSessionId,
@@ -482,11 +513,54 @@ class HermesSidebarProvider {
       cwd: this.workspaceCwd(),
       handlers: {
         onSessionUpdate: (update, acpSessionId) => {
+          // Title arrives via session_info_update (e.g. after the agent
+          // generates a summary) — surface it in the topbar immediately.
+          // The title sits on the update itself: {sessionUpdate,
+          // title: "..."}.
+          if (update.sessionUpdate === "session_info_update") {
+            const title = update.title || "";
+            if (title) {
+              const session = [...this.sessions].find(s => this.acpSessions.get(s.id) === acpSessionId);
+              if (session && session.title !== title) {
+                session.title = title;
+                session.updatedAt = Date.now();
+                this.saveSessions().then(() => this.postState());
+              }
+            }
+          }
           const renderer = this.acpRenderers.get(acpSessionId);
           if (renderer) renderer.onSessionUpdate(update);
         },
         onError: err => {
           vscode.window.showWarningMessage(`Hermes ACP: ${err.message}`);
+        },
+        onPermissionRequest: request => {
+          const params = request.params || {};
+          const sessionId = params.sessionId || "";
+          const toolCall = params.toolCall || {};
+          const options = Array.isArray(params.options) ? params.options : [];
+          const allow = options.find(option => option.optionId === "allow_once" || option.optionId === "allow");
+          const deny = options.find(option => option.optionId === "deny" || option.optionId === "reject_once");
+          const mode = this.activeSession().settings?.mode || "Auto";
+          if (mode === "Auto" && allow) {
+            // Auto mode: fully authorized — approve without asking.
+            client.respond(request.id, { outcome: "selected", optionId: allow.optionId });
+            return;
+          }
+          // Manual mode: surface a confirmation anchored above the composer.
+          const title = toolCall.title || "Request permission";
+          const diff = Array.isArray(toolCall.content)
+            ? toolCall.content.find(block => block && block.type === "diff")
+            : null;
+          this.pendingPermission = { request, sessionId, title, diff };
+          this.post({
+            type: "permissionRequest",
+            requestId: request.id,
+            sessionId,
+            title,
+            diff,
+            denyAvailable: Boolean(deny)
+          });
         },
         onExit: code => {
           // Process died — fail any in-flight renderers.

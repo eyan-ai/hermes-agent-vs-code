@@ -26,6 +26,7 @@ const state = {
   models: [],
   mutedPaths: {},
   copiedIndex: undefined,
+  permission: null,
   settings: {
     mode: "Auto",
     model: "5.5",
@@ -307,7 +308,7 @@ function renderThinkingStep(step, messageId, index, running) {
     // Converged action row: natural-language summary with the outcome badge
     // on the same line; the whole row toggles the command/result details.
     const badge = step.done ? (step.status === "error" ? `<span class="step-badge error">✗</span>` : `<span class="step-badge">✓</span>`) : "";
-    const hasDetail = Boolean(code || result);
+    const hasDetail = Boolean(code || result || step.diff);
     return `<div class="timeline-item tool-item">
       <span class="timeline-dot ${dotClass}"></span>
       <div class="timeline-body">
@@ -318,6 +319,7 @@ function renderThinkingStep(step, messageId, index, running) {
         </button>
         ${hasDetail ? `<div class="step-content ${open ? "" : "collapsed"}">
           ${code ? `<div class="io-block"><span class="io-label">IN</span><pre class="code-sample"><code>${h(code)}</code></pre></div>` : ""}
+          ${step.diff ? renderDiff(step.diff) : ""}
           ${result ? `<div class="io-block"><span class="io-label">OUT</span><pre class="code-sample"><code>${h(result)}</code></pre></div>` : ""}
         </div>` : ""}
       </div>
@@ -383,6 +385,38 @@ function renderPopovers() {
     </div>`;
 }
 
+function renderDiff(diff) {
+  if (!diff) return "";
+  const oldText = diff.oldText || diff.old_text || "";
+  const newText = diff.newText || diff.new_text || "";
+  if (!oldText && !newText) return "";
+  const oldLines = String(oldText).split("\n");
+  const newLines = String(newText).split("\n");
+  // Simple line diff: removed lines red, added lines green.
+  const removed = oldLines.filter(line => !newLines.includes(line));
+  const added = newLines.filter(line => !oldLines.includes(line));
+  const rows = [
+    ...removed.map(line => `<div class="diff-line diff-del"><span class="diff-sign">−</span><code>${h(line)}</code></div>`),
+    ...added.map(line => `<div class="diff-line diff-add"><span class="diff-sign">+</span><code>${h(line)}</code></div>`)
+  ];
+  return `<div class="diff-view">${rows.join("")}</div>`;
+}
+
+function renderPermission() {
+  const p = state.permission;
+  if (!p) return "";
+  const path = p.diff && (p.diff.path || p.diff.file) ? h(p.diff.path) : "";
+  return `<div class="permission-popup" role="alertdialog" aria-label="Permission request">
+    <div class="permission-head">${icons.bolt}<strong>${h(p.title || "Request permission")}</strong></div>
+    ${path ? `<div class="permission-path">${path}</div>` : ""}
+    ${renderDiff(p.diff)}
+    <div class="permission-actions">
+      ${p.denyAvailable ? `<button class="permission-btn deny" id="permissionDeny" type="button">Deny</button>` : ""}
+      <button class="permission-btn allow" id="permissionAllow" type="button">Allow</button>
+    </div>
+  </div>`;
+}
+
 function renderComposer(running) {
   const context = state.editorContext;
   const muted = Boolean(context && state.mutedPaths[context.path]);
@@ -390,6 +424,7 @@ function renderComposer(running) {
     ? `<button class="composer-chip ${muted ? "muted" : ""}" id="contextChip" type="button" title="${muted ? "Use context" : "Mute context"}" aria-label="${muted ? "Use context" : "Mute context"}">${muted ? icons.eyeOff : (context.type === "selection" ? icons.selection : icons.file)}<span>${h(context.name)}</span></button>`
     : "";
   return `<div class="composer-wrap">
+    ${renderPermission()}
     ${renderPopovers()}
     <div class="composer">
       <div class="composer-top ${state.attachments.length ? "visible" : ""}">
@@ -474,7 +509,11 @@ function bind() {
   });
   document.querySelectorAll(".history-item").forEach(item => {
     const id = item.dataset.session;
-    item.querySelector(".history-name")?.addEventListener("click", () => vscode.postMessage({ type: "selectSession", id }));
+    item.querySelector(".history-name")?.addEventListener("click", () => {
+      state.historyOpen = false;
+      vscode.postMessage({ type: "selectSession", id });
+      render();
+    });
     item.querySelector(".rename-history")?.addEventListener("click", event => {
       event.stopPropagation();
       const input = item.querySelector(".history-rename");
@@ -608,6 +647,18 @@ function bind() {
     }
   });
   document.querySelector("#sendBtn")?.addEventListener("click", submit);
+  document.querySelector("#permissionAllow")?.addEventListener("click", () => {
+    const requestId = state.permission?.requestId;
+    state.permission = null;
+    vscode.postMessage({ type: "permissionResponse", requestId, allow: true });
+    render();
+  });
+  document.querySelector("#permissionDeny")?.addEventListener("click", () => {
+    const requestId = state.permission?.requestId;
+    state.permission = null;
+    vscode.postMessage({ type: "permissionResponse", requestId, allow: false });
+    render();
+  });
 }
 
 // Persistent outside-click handling: closes popovers, commits title edits.
@@ -714,6 +765,15 @@ window.addEventListener("message", event => {
   }
   if (message.type === "focusInput") {
     document.querySelector("#prompt")?.focus();
+  }
+  if (message.type === "permissionRequest") {
+    state.permission = {
+      requestId: message.requestId,
+      title: message.title,
+      diff: message.diff,
+      denyAvailable: message.denyAvailable
+    };
+    render();
   }
 });
 
