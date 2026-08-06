@@ -314,7 +314,7 @@ function renderThinkingStep(step, messageId, index, running) {
         <button class="step-row ${open ? "open" : ""}" data-step-key="${key}" type="button" aria-expanded="${open}">
           <span class="step-summary">${h(summary)}</span>
           ${badge}
-          ${hasDetail ? `<span class="step-caret">▸</span>` : ""}
+          ${hasDetail ? `<span class="step-caret">›</span>` : ""}
         </button>
         ${hasDetail ? `<div class="step-content ${open ? "" : "collapsed"}">
           ${code ? `<div class="io-block"><span class="io-label">IN</span><pre class="code-sample"><code>${h(code)}</code></pre></div>` : ""}
@@ -342,7 +342,7 @@ function renderThinkingStep(step, messageId, index, running) {
     <div class="timeline-body">
       <button class="step-row ${open ? "open" : ""}" data-step-key="${key}" type="button" aria-expanded="${open}">
         <span class="step-summary">${h(title)}</span>
-        ${hasText ? `<span class="step-caret">▸</span>` : ""}
+        ${hasText ? `<span class="step-caret">›</span>` : ""}
       </button>
       ${hasText ? `<div class="step-content ${open ? "" : "collapsed"}">
         <p>${h(text)}</p>

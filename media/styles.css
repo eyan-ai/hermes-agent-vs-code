@@ -127,14 +127,13 @@ button { color: inherit; }
 .timeline-status { color: #64c988; font-weight: 600; }
 .timeline-body p { margin: 0; color: var(--muted); white-space: pre-wrap; }
 .timeline-body .code-sample { margin: 6px 0 2px; }
-.step-row { width: 100%; border: 0; background: transparent; padding: 2px 0; display: flex; align-items: center; gap: 7px; text-align: left; cursor: default; color: var(--text); border-radius: 4px; font: inherit; }
+.step-row { width: 100%; border: 0; background: transparent; padding: 2px 0; display: flex; align-items: center; gap: 0; text-align: left; cursor: default; color: var(--text); border-radius: 4px; font: inherit; }
 .step-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; font-weight: 500; }
-.step-badge { color: #64c988; font-weight: 700; font-size: 12px; flex: 0 0 auto; }
+.step-badge { color: #64c988; font-weight: 700; font-size: 12px; flex: 0 0 auto; margin-left: 6px; }
 .step-badge.error { color: #e0645f; }
-/* The title is a quiet text row; hovering reveals a small caret on the
-   right — clicking it expands/collapses the details. */
-.step-caret { color: var(--muted); font-size: 10px; flex: 0 0 auto; transition: transform .12s, opacity .12s; margin-left: auto; opacity: 0; cursor: pointer; padding: 0 2px; }
-.step-row:hover .step-caret, .step-row.open .step-caret { opacity: 1; }
+/* Caret sits right after the title text (like "Thinking›"), always visible
+   when the row has details; rotates down when expanded. */
+.step-caret { color: var(--muted); font-size: 13px; line-height: 1; flex: 0 0 auto; margin-left: 4px; cursor: pointer; transition: transform .12s; display: inline-block; }
 .step-row.open .step-caret { transform: rotate(90deg); }
 .step-content { margin: 3px 0 2px; }
 .step-content.collapsed { display: none; }
