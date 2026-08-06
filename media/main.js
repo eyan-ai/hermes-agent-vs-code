@@ -69,6 +69,22 @@ function activeSession() {
   return state.sessions.find(session => session.id === state.activeSessionId) || state.sessions[0] || { title: "Untitled", messages: [] };
 }
 
+/**
+ * Display title with a fallback: once a session has messages, a still-
+ * "Untitled" title reads as the first user message (trimmed). The ACP title
+ * sync is async (server generates it up to ~30s later), so the topbar and
+ * history should never sit on a bare "Untitled" while content exists.
+ */
+function displayTitle(session) {
+  if (session.title && session.title !== "Untitled") return session.title;
+  const firstUser = (session.messages || []).find(message => message.role === "user" && message.text);
+  if (firstUser && firstUser.text) {
+    const text = firstUser.text.replace(/\s+/g, " ").trim();
+    return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  }
+  return "Untitled";
+}
+
 function ageLabel(session) {
   const diff = Math.max(0, Date.now() - (session.updatedAt || session.createdAt || Date.now()));
   const minutes = Math.max(1, Math.round(diff / 60000));
@@ -115,9 +131,9 @@ function render() {
     <div class="app">
       <header class="topbar">
         <button class="title-btn ${state.titleEditing ? "editing" : ""}" id="titleBtn" type="button">
-          <span class="title-text">${h(session.title || "Untitled")}</span>
+          <span class="title-text">${h(displayTitle(session))}</span>
           <span class="title-edit">${icons.edit}</span>
-          <input class="title-input" id="titleInput" maxlength="64" value="${h(state.titleEditing ? state.titleDraft : (session.title || "Untitled"))}">
+          <input class="title-input" id="titleInput" maxlength="64" value="${h(state.titleEditing ? state.titleDraft : (displayTitle(session)))}">
         </button>
         <div class="top-actions">
           <button class="icon-btn ${state.historyOpen ? "active" : ""}" id="historyBtn" type="button" title="History">${icons.history}</button>
@@ -218,7 +234,7 @@ function renderHistory() {
         return `<div class="history-item ${session.id === state.activeSessionId ? "active" : ""} ${renaming ? "renaming" : ""}" data-session="${session.id}">
           ${renaming
             ? `<input class="history-rename" maxlength="64" value="${h(session.title)}">`
-            : `<span class="history-name">${h(session.title)}</span>`}
+            : `<span class="history-name">${h(displayTitle(session))}</span>`}
           <span class="history-age">${ageLabel(session)}</span>
           <span class="history-actions">
             <button class="history-action rename-history" type="button">${renaming ? "✓" : icons.edit}</button>
@@ -448,7 +464,7 @@ function renderComposer(running) {
 function bind() {
   document.querySelector("#titleBtn")?.addEventListener("click", event => {
     event.stopPropagation();
-    if (!state.titleEditing) state.titleDraft = activeSession().title || "Untitled";
+    if (!state.titleEditing) state.titleDraft = displayTitle(activeSession());
     state.titleEditing = true;
     render();
     const input = document.querySelector("#titleInput");

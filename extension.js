@@ -123,6 +123,8 @@ class HermesSidebarProvider {
     this.acp = undefined;
     this.acpSessions = new Map();
     this.acpRenderers = new Map();
+    this.pendingPermission = undefined;
+    this.docDiffDecorations = [];
   }
 
   resolveWebviewView(view) {
@@ -171,6 +173,9 @@ class HermesSidebarProvider {
 
   async newSession() {
     const session = createSession("Untitled");
+    // Inherit the last-chosen approval mode (one-time change, reused until
+    // changed again).
+    session.settings = { mode: lastMode(this.context) };
     this.sessions.unshift(session);
     this.activeSessionId = session.id;
     await this.saveSessions();
@@ -256,16 +261,20 @@ class HermesSidebarProvider {
         // User answered the approval popup: allow (select allow_once) or deny.
         const pending = this.pendingPermission;
         this.pendingPermission = undefined;
+        this.clearDocDiff();
         if (pending && this.acp && message.requestId === pending.request.id) {
           if (message.allow) {
             const options = (pending.request.params?.options) || [];
             const allow = options.find(option => option.optionId === "allow_once" || option.optionId === "allow");
+            // ACP discriminates on `outcome`: the response is NESTED —
+            // { outcome: { outcome: "selected", optionId } }. A flat
+            // { outcome: "selected" } fails pydantic parsing server-side
+            // and the edit silently never executes.
             this.acp.respond(pending.request.id, {
-              outcome: "selected",
-              optionId: allow ? allow.optionId : "allow_once"
+              outcome: { outcome: "selected", optionId: allow ? allow.optionId : "allow_once" }
             });
           } else {
-            this.acp.respond(pending.request.id, { outcome: "cancelled" });
+            this.acp.respond(pending.request.id, { outcome: { outcome: "cancelled" } });
           }
         }
         break;
@@ -286,6 +295,8 @@ class HermesSidebarProvider {
         break;
       case "settingsChanged":
         this.activeSession().settings = message.settings;
+        // Persist the mode choice globally so future sessions inherit it.
+        saveLastMode(this.context, message.settings?.mode);
         await this.saveSessions();
         break;
       default:
@@ -543,8 +554,9 @@ class HermesSidebarProvider {
           const deny = options.find(option => option.optionId === "deny" || option.optionId === "reject_once");
           const mode = this.activeSession().settings?.mode || "Auto";
           if (mode === "Auto" && allow) {
-            // Auto mode: fully authorized — approve without asking.
-            client.respond(request.id, { outcome: "selected", optionId: allow.optionId });
+            // Auto mode: fully authorized — approve without asking. Nested
+            // outcome object per ACP's discriminator.
+            client.respond(request.id, { outcome: { outcome: "selected", optionId: allow.optionId } });
             return;
           }
           // Manual mode: surface a confirmation anchored above the composer.
@@ -561,6 +573,10 @@ class HermesSidebarProvider {
             diff,
             denyAvailable: Boolean(deny)
           });
+          // Highlight the proposed change IN the open document: removed
+          // lines in red, added lines in green, so the user reviews the
+          // edit in place before approving.
+          this.showDocDiff(diff);
         },
         onExit: code => {
           // Process died — fail any in-flight renderers.
@@ -616,6 +632,83 @@ class HermesSidebarProvider {
     const renderer = this.acpRenderers.get(acpSessionId);
     if (renderer) renderer.finalize("stopped");
     this.acpRenderers.delete(acpSessionId);
+  }
+
+  /**
+   * Highlight an edit proposal in the open document: removed lines red,
+   * added lines green (in-place review before approving). Cleared when the
+   * user answers.
+   */
+  showDocDiff(diff) {
+    this.clearDocDiff();
+    if (!diff) return;
+    const oldText = diff.oldText || diff.old_text || "";
+    const newText = diff.newText || diff.new_text || "";
+    const file = diff.path || diff.file || "";
+    if (!file) return;
+    let uri;
+    try {
+      uri = vscode.Uri.file(file);
+    } catch {
+      return;
+    }
+    const editor = vscode.window.visibleTextEditors.find(ed => ed.document.uri.fsPath === uri.fsPath);
+    if (!editor) return;
+    const doc = editor.document;
+    const oldLines = String(oldText).split("\n");
+    const newLines = String(newText).split("\n");
+    const removedRanges = [];
+    const addedRanges = [];
+    for (let i = 0; i < Math.max(oldLines.length, newLines.length); i += 1) {
+      const oldLine = oldLines[i];
+      const newLine = newLines[i];
+      if (oldLine !== undefined && newLine !== undefined && oldLine !== newLine) {
+        // Replaced line: red over the old content, green for the new.
+        const lineIdx = i;
+        if (lineIdx < doc.lineCount) {
+          removedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
+          addedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
+        }
+      } else if (oldLine !== undefined && newLine === undefined) {
+        const lineIdx = i;
+        if (lineIdx < doc.lineCount) {
+          removedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
+        }
+      } else if (oldLine === undefined && newLine !== undefined) {
+        const lineIdx = i;
+        if (lineIdx < doc.lineCount) {
+          addedRanges.push(new vscode.Range(lineIdx, 0, lineIdx, doc.lineAt(lineIdx).text.length));
+        }
+      }
+    }
+    this.docDiffDecorations = [];
+    if (removedRanges.length) {
+      const del = vscode.window.createTextEditorDecorationType({
+        backgroundColor: "rgba(224, 100, 95, .28)",
+        isWholeLine: true,
+        overviewRulerColor: "rgba(224, 100, 95, .6)"
+      });
+      editor.setDecorations(del, removedRanges);
+      this.docDiffDecorations.push(del);
+    }
+    if (addedRanges.length) {
+      const add = vscode.window.createTextEditorDecorationType({
+        backgroundColor: "rgba(100, 201, 136, .28)",
+        isWholeLine: true,
+        overviewRulerColor: "rgba(100, 201, 136, .6)"
+      });
+      editor.setDecorations(add, addedRanges);
+      this.docDiffDecorations.push(add);
+    }
+  }
+
+  clearDocDiff() {
+    for (const decoration of this.docDiffDecorations || []) {
+      try {
+        decoration.dispose();
+      } catch { /* already gone */ }
+    }
+    this.docDiffDecorations = [];
   }
 
   workspaceCwd() {
@@ -856,6 +949,21 @@ function createSession(title) {
     settings: {},
     messages: []
   };
+}
+
+/** Remember the last-chosen mode so new sessions inherit it. */
+const MODE_KEY = "hermesAgent.lastMode";
+function lastMode(ctx) {
+  try {
+    return ctx.globalState.get(MODE_KEY, "Auto");
+  } catch {
+    return "Auto";
+  }
+}
+function saveLastMode(ctx, mode) {
+  try {
+    ctx.globalState.update(MODE_KEY, mode === "Manual" ? "Manual" : "Auto");
+  } catch { /* best-effort */ }
 }
 
 function cloneMessage(message) {
