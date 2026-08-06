@@ -8,7 +8,6 @@ const state = {
   workspaceItems: [],
   attachments: [],
   skill: "",
-  contextMuted: false,
   historyOpen: false,
   memoryOpen: false,
   titleEditing: false,
@@ -25,6 +24,7 @@ const state = {
   openThinking: {},
   models: [],
   warning: "",
+  mutedPaths: {},
   settings: {
     mode: "Auto",
     model: "5.5",
@@ -48,7 +48,8 @@ const icons = {
   gear: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-.6 1.8 1.8 0 0 0-1.98.36l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 .6-1 1.8 1.8 0 0 0-.36-1.98l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.8 1.8 0 0 0 9 4.6a1.8 1.8 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 .6 1.8 1.8 0 0 0 1.98-.36l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.8 1.8 0 0 0 19.4 9c.2.35.4.65.6 1h.1a2 2 0 1 1 0 4H20a1.8 1.8 0 0 0-.6 1Z"/></svg>',
   copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
   branch: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h3a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3"/><path d="M6 8v10"/></svg>',
-  chevron: '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 4 4 4-4 4"/></svg>'
+  chevron: '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 4 4 4-4 4"/></svg>',
+  eyeOff: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.9 17.9A10.8 10.8 0 0 1 12 20C6.5 20 2.7 15.9 1 12c.7-1.6 1.8-3.1 3.1-4.4"/><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5.5 0 9.3 4.1 11 8a12.4 12.4 0 0 1-2 3.2"/><path d="M3 3l18 18"/></svg>'
 };
 
 function h(value) {
@@ -73,8 +74,10 @@ function ageLabel(session) {
 }
 
 function currentContextAttachment() {
-  if (state.contextMuted) return null;
-  return state.editorContext;
+  const context = state.editorContext;
+  if (!context) return null;
+  if (state.mutedPaths[context.path]) return null;
+  return context;
 }
 
 function attachmentsForMessage(message) {
@@ -240,14 +243,17 @@ function renderAssistant(message, index, messages) {
   const running = message.status === "running";
   const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
   const questionIndex = findQuestionIndex(messages, index);
-  const thinkingOpen = Boolean(state.openThinking[message.id]) || running;
+  // Open while working (no answer yet), auto-collapse once the answer
+  // starts streaming, unless the user manually toggled it.
+  const manual = state.openThinking[message.id];
+  const thinkingOpen = manual !== undefined ? manual : (running && !message.text);
   const caret = icons.chevron.replace("<svg", '<svg class="thinking-caret"').replace('d="m6 4 4 4-4 4"', 'd="m4 6 4 4 4-4"');
   return `<div class="assistant">
     <div class="run-header">
-      <button class="thinking-toggle ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}" aria-expanded="${thinkingOpen}">
+      <button class="thinking-toggle ${running ? "running" : ""} ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}" aria-expanded="${thinkingOpen}">
         <span class="run-label">${running ? "Working" : `Worked for 0m ${worked}s`}</span>${caret}
       </button>
-      <span>${h(state.settings.mode)} · ${h(state.settings.model)} · ${h(state.settings.effort)}</span>
+      <span>${h(state.settings.mode)}</span>
     </div>
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
       ${(message.thinking || []).map(step => renderThinkingStep(step)).join("")}
@@ -271,10 +277,11 @@ function renderThinkingStep(step) {
   if (step.kind === "tool") {
     const args = (step.args || "").trim();
     const result = (step.result || "").trim();
+    const dotClass = step.status === "success" ? "success" : step.status === "error" ? "error" : "";
     return `<div class="timeline-item tool-item">
-      <span class="timeline-dot tool"></span>
+      <span class="timeline-dot ${dotClass}"></span>
       <div class="timeline-body">
-        <div class="timeline-title"><strong>${h(step.title)}</strong>${step.done ? `<span class="timeline-status">✓</span>` : ""}</div>
+        <div class="timeline-title"><strong>${h(step.summary || step.title)}</strong>${step.done ? `<span class="timeline-status">${step.status === "error" ? "✗" : "✓"}</span>` : ""}</div>
         ${args ? `<pre class="code-sample"><code>${h(args)}</code></pre>` : ""}
         ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
       </div>
@@ -319,20 +326,16 @@ function renderPopovers() {
             <span>${state.settings.mode === mode ? "✓" : ""}</span>
           </button>`).join("")}
         </div>
-        <label class="settings-row"><span>Model</span><select class="mode-select" id="modelSelect">${modelOptions()}</select></label>
-        <label class="settings-row"><span>Effort</span><select class="mode-select" id="effortSelect">${["Low", "Medium", "High"].map(effort => `<option ${state.settings.effort === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></label>
       </div>
     </div>`;
 }
 
-function modelOptions() {
-  const models = state.models && state.models.length ? state.models : [state.settings.model || "5.5"];
-  const current = state.settings.model;
-  return models.map(model => `<option ${current === model ? "selected" : ""}>${h(model)}</option>`).join("");
-}
-
 function renderComposer(running) {
-  const context = currentContextAttachment();
+  const context = state.editorContext;
+  const muted = Boolean(context && state.mutedPaths[context.path]);
+  const contextChip = context
+    ? `<button class="composer-chip ${muted ? "muted" : ""}" id="contextChip" type="button" title="${muted ? "Use context" : "Mute context"}" aria-label="${muted ? "Use context" : "Mute context"}">${muted ? icons.eyeOff : (context.type === "selection" ? icons.selection : icons.file)}<span>${h(context.name)}</span></button>`
+    : "";
   return `<div class="composer-wrap">
     ${renderPopovers()}
     <div class="composer">
@@ -346,8 +349,8 @@ function renderComposer(running) {
       <div class="toolbar">
         <button class="tool-btn" id="pickBtn" type="button" title="Add files or folders" aria-label="Add files or folders">${icons.add}</button>
         <div class="divider"></div>
-        <div class="context-strip">${context ? `<button class="context-chip" id="contextChip" type="button">${context.type === "selection" ? icons.selection : icons.file}<span>${h(context.name)}</span></button>` : `<span class="context-chip">${icons.file}<span>Editor context off</span></span>`}</div>
-        <button class="tool-btn" id="modeBtn" type="button" title="Run settings"><span class="mode-label">${h(state.settings.mode)} · ${h(state.settings.model)} · ${h(state.settings.effort)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
+        <div class="context-strip">${contextChip}</div>
+        <button class="tool-btn" id="modeBtn" type="button" title="Run settings"><span class="mode-label">${h(state.settings.mode)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
         <button class="send ${running || canSubmit() ? "ready" : ""} ${running ? "stop" : ""}" id="sendBtn" type="button">${running ? icons.stop : icons.send}</button>
       </div>
     </div>
@@ -462,7 +465,9 @@ function bind() {
     render();
   });
   document.querySelector("#contextChip")?.addEventListener("click", () => {
-    state.contextMuted = !state.contextMuted;
+    const context = state.editorContext;
+    if (!context) return;
+    state.mutedPaths[context.path] = !state.mutedPaths[context.path];
     render();
   });
   document.querySelectorAll(".remove-pill").forEach(button => {
@@ -496,23 +501,11 @@ function bind() {
   });
   document.querySelector("#resetMode")?.addEventListener("click", () => {
     state.settings.mode = "Auto";
-    state.settings.model = state.models[0] || "5.5";
-    state.settings.effort = "Medium";
     settingsChanged();
     render();
   });
   document.querySelector("#warningClose")?.addEventListener("click", () => {
     state.warning = "";
-    render();
-  });
-  document.querySelector("#modelSelect")?.addEventListener("change", event => {
-    state.settings.model = event.target.value;
-    settingsChanged();
-    render();
-  });
-  document.querySelector("#effortSelect")?.addEventListener("change", event => {
-    state.settings.effort = event.target.value;
-    settingsChanged();
     render();
   });
   const prompt = document.querySelector("#prompt");

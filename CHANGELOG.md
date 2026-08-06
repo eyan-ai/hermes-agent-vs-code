@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+
+- Context chip matches the UI spec: no border, transparent until hover; clicking toggles mute for the current document (name turns faint with an eye-off icon, chip stays); switching documents shows the new document normally; empty when no document is open — "Editor context off" placeholder removed.
+- The agent column never hosts documents: every document open (attachments, SOUL/USER/MEMORY.md) goes to the document column, creating one if needed.
+- Run settings reduced to Mode only (Model/Effort removed from the popover and from the toolbar echo).
+- Working timeline is now readable: tool calls show a natural-language summary (e.g. "Reading /tmp/t.txt"), a status dot (grey = thinking, green = success, red = failure) and a ✓/✗ marker; code/args/results still render in monospace boxes. The running label has a spinner animation.
+- Working section auto-expands while running, auto-collapses as soon as the answer starts streaming; manual toggle always wins.
+
 ## 0.2.4
 
 - `@` workspace picker shows only files inside the opened folder (the folder itself is not listed), names only — no duplicated path line — with ellipsis on long names (path remains in the tooltip).

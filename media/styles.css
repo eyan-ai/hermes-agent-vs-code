@@ -109,6 +109,8 @@ button { color: inherit; }
 .thinking-toggle { min-width: 0; border: 0; background: transparent; color: var(--muted); padding: 0; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; line-height: 20px; font-weight: 400; }
 .thinking-toggle .thinking-caret { width: 14px; height: 14px; flex: 0 0 auto; transition: transform .14s ease; }
 .thinking-toggle:not(.open) .thinking-caret { transform: rotate(-90deg); }
+.thinking-toggle.running::after { content: ""; width: 10px; height: 10px; flex: 0 0 auto; border-radius: 99px; border: 1.5px solid color-mix(in srgb, var(--muted) 40%, transparent); border-top-color: var(--primary); animation: workingSpin .8s linear infinite; }
+@keyframes workingSpin { to { transform: rotate(360deg); } }
 .run-header > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400; }
 .thinking { display: grid; gap: 0; margin: 4px 0; padding-left: 6px; }
 .thinking.collapsed { display: none; }
@@ -119,7 +121,6 @@ button { color: inherit; }
 .timeline-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 99px; background: #a0a0a0; z-index: 1; }
 .timeline-dot.success { background: #64c988; }
 .timeline-dot.error { background: #e0645f; }
-.timeline-dot.tool { background: var(--primary); }
 .timeline-body { min-width: 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
 .timeline-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; font-size: 12px; line-height: 18px; color: var(--muted); }
 .timeline-title strong { color: var(--text); font-weight: 600; }
@@ -198,9 +199,12 @@ button { color: inherit; }
 #modeBtn .mode-label { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #modeBtn .dropdown-icon { width: 12px; height: 12px; opacity: .8; }
 .context-strip { flex: 1; min-width: 0; display: flex; overflow: hidden; }
-.context-chip { max-width: 150px; display: inline-flex; gap: 6px; align-items: center; color: var(--muted); overflow: hidden; white-space: nowrap; border-radius: 6px; padding: 0 7px; height: 28px; cursor: pointer; }
-.context-chip:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
-.context-chip span { overflow: hidden; text-overflow: ellipsis; }
+.composer-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 188px; height: 28px; border-radius: 6px; border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 400; padding: 0 7px; white-space: nowrap; cursor: pointer; }
+.composer-chip .icon { width: 14px; height: 14px; flex: 0 0 auto; }
+.composer-chip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-chip:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.composer-chip.muted { color: color-mix(in srgb, var(--muted) 45%, var(--panel)); }
+.composer-chip.muted:hover { background: transparent; color: color-mix(in srgb, var(--muted) 60%, var(--panel)); }
 .divider { width: 1px; height: 20px; background: var(--border-soft); }
 .send { width: 30px; height: 30px; border: 0; border-radius: 7px; background: color-mix(in srgb, var(--primary) 28%, white); color: white; display: grid; place-items: center; flex: 0 0 auto; opacity: .5; cursor: default; }
 .send.ready, .send.stop { opacity: 1; cursor: pointer; background: var(--primary); }

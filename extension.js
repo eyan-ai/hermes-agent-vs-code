@@ -326,7 +326,7 @@ class HermesSidebarProvider {
       await vscode.commands.executeCommand("revealFileInOS", uri);
       return;
     }
-    await vscode.window.showTextDocument(uri, { preview: true });
+    await vscode.window.showTextDocument(uri, { preview: true, viewColumn: this.findDocumentColumn() });
   }
 
   async openMemoryDoc(file) {
@@ -477,7 +477,7 @@ class HermesSidebarProvider {
           pushThinking();
         },
         onTool: tool => {
-          assistantMessage.thinking.push({ kind: "tool", title: tool.name, args: tool.args || "", result: tool.result || "", done: tool.done });
+          assistantMessage.thinking.push({ kind: "tool", title: tool.name, summary: tool.summary || tool.name, args: tool.args || "", result: tool.result || "", done: tool.done, status: tool.status || "pending" });
           pushThinking();
         },
         onToolUpdate: tool => {
@@ -486,6 +486,7 @@ class HermesSidebarProvider {
             if (steps[index].kind === "tool" && steps[index].title === tool.name) {
               steps[index].result = tool.result || "";
               steps[index].done = tool.done;
+              steps[index].status = tool.status || steps[index].status;
               break;
             }
           }

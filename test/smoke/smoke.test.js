@@ -106,7 +106,9 @@ Session:        20260806_114600_test\r
     const okTool = tools.length === 1 && tools[0].name === "read_file"
       && tools[0].args.includes('"path"')
       && tools[0].result.includes("hello")
-      && tools[0].done === true;
+      && tools[0].done === true
+      && tools[0].summary === "Reading /tmp/hermes_test.txt"
+      && tools[0].status === "success";
     const okUpdate = updates.some(u => u.done === true && u.result.includes("hello"));
     const okAnswer = answer.join("\n").includes("hello") && !answer.join("\n").includes("Session:");
     if (okThinking && okTool && okUpdate && okAnswer) ok("chat parser: reasoning + tool(args/result) + answer blocks");
