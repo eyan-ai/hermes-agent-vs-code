@@ -16,6 +16,11 @@ async function main() {
       extensionDevelopmentPath: extDir,
       extensionTestsPath: testFile,
       vscodeExecutablePath,
+      // ELECTRON_RUN_AS_NODE=1 can leak into the environment from other
+      // Electron tooling and makes the VS Code binary behave as plain Node
+      // (it then treats the workspace path as a script and dies with
+      // MODULE_NOT_FOUND). Strip it so the GUI binary launches normally.
+      extensionTestsEnv: { ELECTRON_RUN_AS_NODE: "" },
       // Short absolute paths: the auto-generated ".vscode-test/user-data" under
       // the repo root exceeds the unix socket path limit (EINVAL).
       launchArgs: [
