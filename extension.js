@@ -233,9 +233,6 @@ class HermesSidebarProvider {
       case "sendPrompt":
         await this.sendPrompt(message);
         break;
-      case "forkFrom":
-        await this.forkFrom(message.index);
-        break;
       case "copyAnswer":
         await vscode.env.clipboard.writeText(String(message.text || ""));
         break;
@@ -393,27 +390,6 @@ class HermesSidebarProvider {
     await this.runAgent(prompt, userMessage, assistantMessage);
   }
 
-  async forkFrom(index) {
-    const source = this.activeSession();
-    if (!Number.isInteger(index) || index < 0 || index >= source.messages.length) return;
-    const user = source.messages[index];
-    if (user?.role !== "user") return;
-    const now = Date.now();
-    const session = {
-      id: id(),
-      title: user.text ? user.text.slice(0, 64) : "Forked session",
-      createdAt: now,
-      updatedAt: now,
-      settings: { ...(source.settings || {}) },
-      // Carry the whole history up to and including the fork point.
-      messages: source.messages.slice(0, index + 1).map(cloneMessage)
-    };
-    this.sessions.unshift(session);
-    this.activeSessionId = session.id;
-    await this.saveSessions();
-    this.postState();
-  }
-
   async runAgent(prompt, userMessage, assistantMessage) {
     const config = vscode.workspace.getConfiguration("hermesAgent");
     const command = config.get("command", "");
@@ -477,7 +453,7 @@ class HermesSidebarProvider {
           pushThinking();
         },
         onTool: tool => {
-          assistantMessage.thinking.push({ kind: "tool", title: tool.name, summary: tool.summary || tool.name, args: tool.args || "", result: tool.result || "", done: tool.done, status: tool.status || "pending" });
+          assistantMessage.thinking.push({ kind: "tool", title: tool.name, summary: tool.summary || tool.name, code: tool.code || "", result: tool.result || "", done: tool.done, status: tool.status || "pending" });
           pushThinking();
         },
         onToolUpdate: tool => {
@@ -553,7 +529,7 @@ class HermesSidebarProvider {
     // Echo what the user actually picked in the session first; fall back to
     // VS Code settings / hermes config / first catalog model.
     const sessionSettings = this.activeSession().settings || {};
-    const model = sessionSettings.model || config.get("model", "") || hermesConfig().model || models[0] || "5.5";
+    const model = sessionSettings.model || config.get("model", "") || hermesConfig().model || models[0] || "";
     this.post({
       type: "state",
       activeSessionId: this.activeSessionId,

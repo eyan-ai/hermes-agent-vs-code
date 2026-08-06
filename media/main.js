@@ -23,8 +23,8 @@ const state = {
   noticeDismissed: false,
   openThinking: {},
   models: [],
-  warning: "",
   mutedPaths: {},
+  copiedIndex: undefined,
   settings: {
     mode: "Auto",
     model: "5.5",
@@ -48,6 +48,7 @@ const icons = {
   gear: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-.6 1.8 1.8 0 0 0-1.98.36l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 .6-1 1.8 1.8 0 0 0-.36-1.98l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.8 1.8 0 0 0 9 4.6a1.8 1.8 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 .6 1.8 1.8 0 0 0 1.98-.36l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.8 1.8 0 0 0 19.4 9c.2.35.4.65.6 1h.1a2 2 0 1 1 0 4H20a1.8 1.8 0 0 0-.6 1Z"/></svg>',
   copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
   branch: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h3a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3"/><path d="M6 8v10"/></svg>',
+  check: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m5 12 5 5 9-10"/></svg>',
   chevron: '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 4 4 4-4 4"/></svg>',
   eyeOff: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17.9 17.9A10.8 10.8 0 0 1 12 20C6.5 20 2.7 15.9 1 12c.7-1.6 1.8-3.1 3.1-4.4"/><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5.5 0 9.3 4.1 11 8a12.4 12.4 0 0 1-2 3.2"/><path d="M3 3l18 18"/></svg>'
 };
@@ -119,7 +120,6 @@ function render() {
       <section class="conversation">
         <div class="scroll">
           ${renderDiagnostics()}
-          ${renderWarning()}
           ${messages.length ? renderThread(messages) : renderHero()}
         </div>
         ${renderComposer(running)}
@@ -134,11 +134,6 @@ function renderDiagnostics() {
   const diagnostics = state.diagnostics || [];
   if (!diagnostics.length) return "";
   return `<div class="diagnostics">${diagnostics.map(item => `<div class="diagnostic ${h(item.kind || "warning")}"><strong>${h(item.title)}</strong><span>${h(item.message)}</span></div>`).join("")}</div>`;
-}
-
-function renderWarning() {
-  if (!state.warning) return "";
-  return `<div class="warning-bar">${icons.bolt}<span>${h(state.warning)}</span><button class="warning-close" id="warningClose" type="button" title="Dismiss" aria-label="Dismiss">×</button></div>`;
 }
 
 function autosizePrompt() {
@@ -242,12 +237,12 @@ function renderUser(message, index, messages) {
 function renderAssistant(message, index, messages) {
   const running = message.status === "running";
   const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
-  const questionIndex = findQuestionIndex(messages, index);
   // Open while working (no answer yet), auto-collapse once the answer
   // starts streaming, unless the user manually toggled it.
   const manual = state.openThinking[message.id];
   const thinkingOpen = manual !== undefined ? manual : (running && !message.text);
   const caret = icons.chevron.replace("<svg", '<svg class="thinking-caret"').replace('d="m6 4 4 4-4 4"', 'd="m4 6 4 4 4-4"');
+  const copied = state.copiedIndex === index;
   return `<div class="assistant">
     <div class="run-header">
       <button class="thinking-toggle ${running ? "running" : ""} ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}" aria-expanded="${thinkingOpen}">
@@ -260,29 +255,21 @@ function renderAssistant(message, index, messages) {
     </div>
     <div class="answer">${window.markdownToHtml ? window.markdownToHtml(message.text) : h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
-      <button class="answer-action copy-answer" type="button" data-index="${index}" title="Copy response" aria-label="Copy response">${icons.copy}</button>
-      ${questionIndex >= 0 ? `<button class="answer-action fork-answer" type="button" data-index="${questionIndex}" title="Fork from this question" aria-label="Fork from this question">${icons.branch}</button>` : ""}
+      <button class="answer-action copy-answer ${copied ? "copied" : ""}" type="button" data-index="${index}" title="${copied ? "Copied" : "Copy response"}" aria-label="Copy response">${copied ? icons.check : icons.copy}</button>
     </div>` : ""}
   </div>`;
 }
 
-function findQuestionIndex(messages, assistantIndex) {
-  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === "user") return index;
-  }
-  return -1;
-}
-
 function renderThinkingStep(step) {
   if (step.kind === "tool") {
-    const args = (step.args || "").trim();
+    const code = (step.code || "").trim();
     const result = (step.result || "").trim();
     const dotClass = step.status === "success" ? "success" : step.status === "error" ? "error" : "";
     return `<div class="timeline-item tool-item">
       <span class="timeline-dot ${dotClass}"></span>
       <div class="timeline-body">
         <div class="timeline-title"><strong>${h(step.summary || step.title)}</strong>${step.done ? `<span class="timeline-status">${step.status === "error" ? "✗" : "✓"}</span>` : ""}</div>
-        ${args ? `<pre class="code-sample"><code>${h(args)}</code></pre>` : ""}
+        ${code ? `<pre class="code-sample"><code>${h(code)}</code></pre>` : ""}
         ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
       </div>
     </div>`;
@@ -448,13 +435,20 @@ function bind() {
       document.querySelector("#prompt")?.focus();
     });
   });
-  document.querySelectorAll(".fork-answer").forEach(button => {
-    button.addEventListener("click", () => vscode.postMessage({ type: "forkFrom", index: Number(button.dataset.index) }));
-  });
   document.querySelectorAll(".copy-answer").forEach(button => {
     button.addEventListener("click", () => {
       const message = activeSession().messages?.[Number(button.dataset.index)];
-      if (message?.text) vscode.postMessage({ type: "copyAnswer", text: message.text });
+      if (message?.text) {
+        vscode.postMessage({ type: "copyAnswer", text: message.text });
+        state.copiedIndex = Number(button.dataset.index);
+        render();
+        setTimeout(() => {
+          if (state.copiedIndex === Number(button.dataset.index)) {
+            state.copiedIndex = undefined;
+            render();
+          }
+        }, 2000);
+      }
     });
   });
   document.querySelector("#pickBtn")?.addEventListener("click", () => vscode.postMessage({ type: "pickLocal" }));
@@ -502,10 +496,6 @@ function bind() {
   document.querySelector("#resetMode")?.addEventListener("click", () => {
     state.settings.mode = "Auto";
     settingsChanged();
-    render();
-  });
-  document.querySelector("#warningClose")?.addEventListener("click", () => {
-    state.warning = "";
     render();
   });
   const prompt = document.querySelector("#prompt");
@@ -560,7 +550,7 @@ document.addEventListener("click", event => {
     state.memoryOpen = false;
     changed = true;
   }
-  if (!event.target.closest(".popover, #modeBtn, #prompt") && (state.contextOpen || state.skillOpen || state.settingsOpen)) {
+  if (!event.target.closest(".popover, #modeBtn") && (state.contextOpen || state.skillOpen || state.settingsOpen)) {
     state.contextOpen = false;
     state.skillOpen = false;
     state.settingsOpen = false;
@@ -587,13 +577,6 @@ function submit() {
   const prompt = document.querySelector("#prompt")?.value || "";
   state.draft = prompt;
   if (!state.draft.trim() && !state.attachments.length && !state.skill && !currentContextAttachment()) return;
-  // Trigger-time model availability check: only warn when the user actually
-  // sends with a model that is not in the installed list, and let them dismiss.
-  if (state.models.length && !state.models.includes(state.settings.model)) {
-    state.warning = `Model "${state.settings.model}" is not in the installed Hermes model list. It may fail at runtime.`;
-  } else {
-    state.warning = "";
-  }
   vscode.postMessage({
     type: "sendPrompt",
     prompt: state.draft,

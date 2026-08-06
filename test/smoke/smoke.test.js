@@ -115,6 +115,27 @@ Session:        20260806_114600_test\r
     else fail("chat parser: reasoning + tool(args/result) + answer blocks", JSON.stringify({ thinking, tools, updates, answer }).slice(0, 400));
   } catch (e) { fail("chat parser: reasoning + tool(args/result) + answer blocks", e); }
 
+  // 8b. Chat output parser: shell/code payloads extracted into tool.code
+  try {
+    const { createChatParser } = require(path.join(__dirname, "..", "..", "lib", "chat-parser.js"));
+    const tools = [];
+    const parser = createChatParser({ onThinkingEnd: () => {}, onTool: t => tools.push(t), onToolUpdate: () => {}, onAnswerLine: () => {} });
+    parser.onChunk(`📞 Tool 1: terminal(['cmd'])\r
+     Args: {\r
+       "command": "ls -la"\r
+     }\r
+┌─ Reasoning ──┐\r
+✅ Tool 1 completed\r
+└──────────────┘\r
+`);
+    parser.flush();
+    if (tools.length === 1 && tools[0].code === "ls -la" && tools[0].summary === "Running `ls -la`" && tools[0].status === "success") {
+      ok("chat parser: tool.code extracts shell command, summary naturalized");
+    } else {
+      fail("chat parser: tool.code extracts shell command, summary naturalized", JSON.stringify(tools));
+    }
+  } catch (e) { fail("chat parser: tool.code extracts shell command, summary naturalized", e); }
+
   // 9. Chat output parser: plain --oneshot fallback streams into the answer
   try {
     const { createChatParser } = require(path.join(__dirname, "..", "..", "lib", "chat-parser.js"));

@@ -151,6 +151,8 @@ button { color: inherit; }
 .answer-action { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; padding: 0; cursor: pointer; }
 .answer-action .icon { width: 13px; height: 13px; }
 .answer-action:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
+.answer-action.copied { color: #64c988; }
+.answer-action.copied:hover { background: transparent; color: #64c988; }
 
 .composer-wrap { position: absolute; left: 21px; right: 21px; bottom: 14px; z-index: 20; }
 .popover { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); display: none; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 9px; box-shadow: var(--shadow); overflow: hidden; }

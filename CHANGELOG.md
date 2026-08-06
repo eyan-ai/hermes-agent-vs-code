@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.6
+
+- Model defaults now reflect the real Hermes backend (`deepseek-v4-flash` from `~/.hermes/config.yaml`); the placeholder "5.5" default and all model-unavailable warnings/fixed dialogs are gone.
+- Run-settings popover closes when clicking anywhere outside it, including the prompt input.
+- Fork feature removed (button, command, backend handler).
+- Copy button gives feedback: turns into a ✓ for 2 seconds after copying, then reverts.
+- Tool calls in the Working timeline show a natural-language summary plus the actual shell command / script / patch in a code box (raw JSON args no longer shown); results stay in their own code box.
+
 ## 0.2.5
 
 - Context chip matches the UI spec: no border, transparent until hover; clicking toggles mute for the current document (name turns faint with an eye-off icon, chip stays); switching documents shows the new document normally; empty when no document is open — "Editor context off" placeholder removed.
