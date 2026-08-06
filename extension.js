@@ -391,9 +391,11 @@ class HermesSidebarProvider {
       role: "assistant",
       text: "",
       status: "running",
-      thinking: [
-        { kind: "thinking", title: "Thinking", text: "Preparing context and request." }
-      ],
+      // No placeholder thinking: a fake "Preparing context…" row would
+      // linger as noise once real reasoning streams in and merge into the
+      // first genuine thought (desktop Hermes shows nothing until the model
+      // actually emits reasoning_content).
+      thinking: [],
       startedAt: Date.now()
     };
     session.messages.push(userMessage, assistantMessage);
@@ -488,7 +490,12 @@ class HermesSidebarProvider {
           if (code) vscode.window.showWarningMessage(`Hermes ACP exited (code ${code}).`);
         },
         onStderr: line => {
-          if (/error|traceback/i.test(line)) {
+          // Only genuine failures reach the UI. Hermes logs INFO/WARNING
+          // chatter (auxiliary client health, payment fallbacks, registry
+          // scans) to stderr — surfacing those would leak internal noise
+          // like "marking openrouter unhealthy (payment / credit error)"
+          // into the working timeline. Require an explicit error marker.
+          if (/\[ERROR\]|\[CRITICAL\]|Traceback|^Error:|FATAL/i.test(line)) {
             const session = this.activeSession();
             const last = [...session.messages].reverse().find(message => message.role === "assistant" && message.status === "running");
             if (last && !last._acpStderrNoted) {
@@ -608,6 +615,9 @@ class HermesSidebarProvider {
       child.stdout.on("end", () => parser.flush());
       child.stderr.on("data", data => {
         const chunk = data.toString();
+        // Only genuine failures reach the timeline (same policy as the ACP
+        // path): INFO/WARNING chatter from hermes internals is noise.
+        if (!/\[ERROR\]|\[CRITICAL\]|Traceback|^Error:|FATAL/i.test(chunk)) return;
         // Converge stderr into a single error step instead of one row per
         // line — a verbose CLI shouldn't flood the working timeline.
         const existing = [...assistantMessage.thinking].reverse().find(step => step.kind === "error" && step.title === "stderr");
