@@ -302,7 +302,7 @@ function glyphFor(type) {
 function renderPopovers() {
   return `<div class="popover ${state.contextOpen ? "open" : ""}" id="contextPopover">
       <div class="popover-head"><span>Add workspace context</span></div>
-      <div class="option-list">${state.workspaceItems.length ? state.workspaceItems.map(item => `<button class="option" type="button" data-path="${h(item.path)}">${item.type === "folder" ? icons.folder : icons.file}<span>${h(item.name)}</span><small>${h(item.path)}</small></button>`).join("") : `<div class="option-empty">No files found</div>`}</div>
+      <div class="option-list">${state.workspaceItems.length ? state.workspaceItems.map(item => `<button class="option" type="button" data-path="${h(item.path)}" title="${h(item.path)}">${item.type === "folder" ? icons.folder : icons.file}<span class="option-name">${h(item.name)}</span></button>`).join("") : `<div class="option-empty">No files found</div>`}</div>
     </div>
     <div class="popover ${state.skillOpen ? "open" : ""}" id="skillPopover">
       <div class="popover-head"><span>Skills</span></div>
@@ -337,7 +337,7 @@ function renderComposer(running) {
     ${renderPopovers()}
     <div class="composer">
       <div class="composer-top ${state.attachments.length ? "visible" : ""}">
-        ${state.attachments.map(item => `<span class="attachment" title="${h(item.name)}">${glyphFor(item.type)}<span class="attachment-name">${h(item.name)}</span><button class="history-action remove-attachment" data-path="${h(item.path)}" type="button">×</button></span>`).join("")}
+        ${state.attachments.map(item => `<span class="attachment-pill" title="${h(item.name)}">${glyphFor(item.type)}<span class="attachment-name">${h(item.name)}</span><button class="remove-pill" data-path="${h(item.path)}" type="button" aria-label="Remove ${h(item.name)}">×</button></span>`).join("")}
       </div>
       <div class="input-line">
         ${state.skill ? `<span class="prompt-skill">/${h(state.skill)}</span>` : ""}
@@ -465,7 +465,7 @@ function bind() {
     state.contextMuted = !state.contextMuted;
     render();
   });
-  document.querySelectorAll(".remove-attachment").forEach(button => {
+  document.querySelectorAll(".remove-pill").forEach(button => {
     button.addEventListener("click", event => {
       event.stopPropagation();
       state.attachments = state.attachments.filter(item => item.path !== button.dataset.path);

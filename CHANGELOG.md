@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+- `@` workspace picker shows only files inside the opened folder (the folder itself is not listed), names only — no duplicated path line — with ellipsis on long names (path remains in the tooltip).
+- Selected-file pills in the composer follow the UI spec: the remove button is hidden until hover, floats over the name with a gradient mask, and takes no layout space.
+- SOUL.md / USER.md / MEMORY.md open as tabs in the document column (a group holding text editors), never in the agent/webview column.
+- Context continues to follow the last active document across editor groups (kept from 0.2.3).
+- Agent-column reuse kept from 0.2.3: new sessions land in an existing agent column (any plugin) instead of creating another one.
+
 ## 0.2.3
 
 - Thinking timeline now shows the real reasoning and execution: natural-language reasoning as text steps, tool calls as steps with their Args in a monospace code box, and tool results (`Result: ...`) in their own code box with a ✓ when completed. Tool-outcome lines no longer pollute the thinking text.

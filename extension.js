@@ -294,8 +294,8 @@ class HermesSidebarProvider {
     const items = files
       .map(uri => toAttachment(uri, "file"))
       .filter(item => !lower || item.name.toLowerCase().includes(lower) || item.path.toLowerCase().includes(lower));
-    const folderItems = folders.map(folder => toAttachment(folder.uri, "folder"));
-    this.post({ type: "workspaceItems", items: [...folderItems, ...items].slice(0, 80) });
+    // Files inside the opened folder only — the folder itself is not listed.
+    this.post({ type: "workspaceItems", items: items.slice(0, 80) });
   }
 
   async pickLocal() {
@@ -343,10 +343,21 @@ class HermesSidebarProvider {
     }
     try {
       const doc = await vscode.workspace.openTextDocument(uri);
-      await vscode.window.showTextDocument(doc, { preview: false });
+      // Open in the document column (a group holding text editors), never in
+      // the agent/webview column.
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: this.findDocumentColumn() });
     } catch (error) {
       vscode.window.showErrorMessage(`Unable to open ${name}: ${error.message}`);
     }
+  }
+
+  findDocumentColumn() {
+    for (const group of vscode.window.tabGroups.all) {
+      if (group.tabs.some(tab => tab.input instanceof vscode.TabInputText)) {
+        return group.viewColumn;
+      }
+    }
+    return vscode.ViewColumn.One;
   }
 
   async sendPrompt(message) {

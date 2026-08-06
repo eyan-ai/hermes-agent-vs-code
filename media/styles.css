@@ -157,8 +157,9 @@ button { color: inherit; }
 #modePopover { left: auto; right: 0; width: 300px; }
 .popover-head { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-weight: 620; }
 .option-list, .skill-list, .mode-panel { padding: 6px; max-height: 260px; overflow: auto; }
-.option, .skill-option { width: 100%; border: 0; border-radius: 7px; background: transparent; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; text-align: left; cursor: pointer; color: var(--text); font-weight: 400; }
+.option, .skill-option { width: 100%; border: 0; border-radius: 7px; background: transparent; display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: center; padding: 8px; text-align: left; cursor: pointer; color: var(--text); font-weight: 400; }
 .option:hover, .skill-option:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.option .option-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .skill-option { grid-template-columns: minmax(0, 1fr) auto; }
 .skill-desc { color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400; }
 .option-empty { padding: 10px 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
@@ -182,6 +183,11 @@ button { color: inherit; }
 .composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .composer-top::-webkit-scrollbar { display: none; }
 .composer-top.visible { display: flex; }
+.attachment-pill { position: relative; display: inline-flex; align-items: center; gap: 3px; width: fit-content; max-width: 128px; min-height: 26px; padding: 3px 7px; border: 1px solid var(--border-soft); border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; line-height: 16px; font-weight: 400; white-space: nowrap; overflow: hidden; flex: 0 0 auto; }
+.attachment-pill .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.remove-pill { position: absolute; right: 0; top: 0; bottom: 0; width: 34px; border: 0; border-radius: 0 6px 6px 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--panel) 94%, transparent) 34%); color: inherit; display: none; place-items: center; cursor: pointer; padding: 0; font-size: 14px; }
+.attachment-pill:hover .remove-pill { display: grid; }
+.remove-pill:hover { color: var(--text); }
 .input-line { min-height: 70px; padding: 13px 12px 8px; display: flex; gap: 8px; align-items: flex-start; }
 .prompt-skill { color: var(--primary); font-size: 14px; line-height: 21px; font-weight: 400; white-space: nowrap; }
 .prompt { flex: 1; min-height: 46px; max-height: 234px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
