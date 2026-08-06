@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.23
+
+- Working section auto-collapses as soon as the answer starts streaming (round-4: thinking over → working folds), not only when the run finishes; manual toggle still wins.
+- Active document surfaces as default context immediately when a new session is created.
+- Composer area is fully opaque: content scrolling under the input is hidden by a solid mask (no fading text through the input).
+- Empty-input guard: the send button no longer lights up from editor context alone; a prompt, attachment, or skill is required to submit.
+
 ## 0.2.6
 
 - Model defaults now reflect the real Hermes backend (`deepseek-v4-flash` from `~/.hermes/config.yaml`); the placeholder "5.5" default and all model-unavailable warnings/fixed dialogs are gone.

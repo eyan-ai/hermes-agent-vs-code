@@ -289,10 +289,12 @@ function renderUser(message, index, messages) {
 
 function renderAssistant(message, index, messages) {
   const running = message.status === "running";
-  // Open while working (thinking streams live), auto-collapse once the run
-  // finishes, unless the user manually toggled it.
+  // Open while working (thinking streams live), auto-collapse once the
+  // answer starts streaming (round-4: thinking over -> working folds),
+  // unless the user manually toggled it.
   const manual = state.openThinking[message.id];
-  const thinkingOpen = manual !== undefined ? manual : running;
+  const answerStarted = Boolean((message.text || "").trim());
+  const thinkingOpen = manual !== undefined ? manual : (running && !answerStarted);
   const caret = icons.chevron.replace("<svg", '<svg class="thinking-caret"').replace('d="m6 4 4 4-4 4"', 'd="m4 6 4 4 4-4"');
   const copied = state.copiedIndex === index;
   return `<div class="assistant">
