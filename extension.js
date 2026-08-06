@@ -94,6 +94,15 @@ function activate(context) {
       if (editor) provider.lastActiveEditor = editor;
       provider.refreshEditorContext();
     }),
+    // When every editor tab is closed, the default context must be cleared
+    // instead of pointing at a stale closed document. activeTextEditor can
+    // be undefined just from focus loss, so clear only on an actual close.
+    vscode.workspace.onDidCloseTextDocument(doc => {
+      if (provider.lastActiveEditor && provider.lastActiveEditor.document === doc) {
+        provider.lastActiveEditor = undefined;
+        provider.refreshEditorContext();
+      }
+    }),
     vscode.window.onDidChangeTextEditorSelection(() => provider.refreshEditorContext())
   );
 }
@@ -704,6 +713,12 @@ class HermesSidebarProvider {
     const editor = this.lastActiveEditor;
     if (!editor) return null;
     const doc = editor.document;
+    // Guard against a document that was closed but whose editor reference
+    // survived (e.g. reopened-then-closed tabs).
+    if (doc.isClosed) {
+      this.lastActiveEditor = undefined;
+      return null;
+    }
     const selection = editor.selection;
     if (!selection.isEmpty) {
       return {

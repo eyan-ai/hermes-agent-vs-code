@@ -80,8 +80,8 @@ button { color: inherit; }
 .notice-close { margin-left: auto; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; font-size: 15px; line-height: 1; }
 .notice-close:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
 .notice-body { padding: 12px; color: var(--muted); line-height: 1.5; }
-.thread { display: grid; gap: 16px; }
-.message.user { display: flex; justify-content: flex-end; position: sticky; top: 0; z-index: 4; padding: 10px 0 16px; margin: -10px 0 2px; isolation: isolate; }
+.thread { display: grid; gap: 10px; }
+.message.user { display: flex; justify-content: flex-end; position: sticky; top: 0; z-index: 4; padding: 6px 0 10px; margin: -6px 0 2px; isolation: isolate; }
 .message.user::before { content: ""; position: absolute; left: -21px; right: -21px; top: -12px; bottom: 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 78%, transparent 100%); }
 .bubble { width: fit-content; max-width: 100%; position: relative; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 46%, white); border-radius: 7px; background: var(--primary-soft); color: var(--text); line-height: 1.5; }
 .bubble.text-only { display: flex; align-items: center; min-height: 36px; }
@@ -104,7 +104,7 @@ button { color: inherit; }
 .folder-glyph::before { content: ""; position: absolute; left: -1.5px; top: -4px; width: 6px; height: 4px; border: 1.5px solid currentColor; border-bottom: 0; border-radius: 2px 2px 0 0; background: var(--panel); }
 .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .question-text { white-space: pre-wrap; overflow: hidden; font-size: 13px; line-height: 1.5; }
-.assistant { display: grid; gap: 10px; }
+.assistant { display: grid; gap: 6px; }
 .run-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; line-height: 20px; }
 .thinking-toggle { min-width: 0; border: 0; background: transparent; color: var(--muted); padding: 0; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; line-height: 20px; font-weight: 400; }
 .thinking-toggle .thinking-caret { width: 14px; height: 14px; flex: 0 0 auto; transition: transform .14s ease; }
@@ -112,9 +112,9 @@ button { color: inherit; }
 .thinking-toggle.running::after { content: ""; width: 10px; height: 10px; flex: 0 0 auto; border-radius: 99px; border: 1.5px solid color-mix(in srgb, var(--muted) 40%, transparent); border-top-color: var(--primary); animation: workingSpin .8s linear infinite; }
 @keyframes workingSpin { to { transform: rotate(360deg); } }
 .run-header > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400; }
-.thinking { display: grid; gap: 0; margin: 4px 0; padding-left: 6px; }
+.thinking { display: grid; gap: 0; margin: 2px 0; padding-left: 6px; }
 .thinking.collapsed { display: none; }
-.timeline-item { position: relative; display: grid; grid-template-columns: 22px 1fr; column-gap: 10px; padding: 0 0 18px; color: var(--muted); }
+.timeline-item { position: relative; display: grid; grid-template-columns: 22px 1fr; column-gap: 10px; padding: 0 0 10px; color: var(--muted); }
 .timeline-item:last-child { padding-bottom: 0; }
 .timeline-item::before { content: ""; position: absolute; left: 3.5px; top: 11px; bottom: -2px; width: 1px; background: var(--border-soft); }
 .timeline-item:last-child::before { display: none; }
@@ -203,7 +203,7 @@ button { color: inherit; }
 .mini-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .mode-label { font-weight: 400; }
 .composer { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
-.composer:focus-within { border-color: color-mix(in srgb, var(--primary) 78%, white); box-shadow: 0 0 0 6px var(--primary-ring); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--primary) 78%, white); }
 .composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .composer-top::-webkit-scrollbar { display: none; }
 .composer-top.visible { display: flex; }
@@ -212,10 +212,10 @@ button { color: inherit; }
 .remove-pill { position: absolute; right: 0; top: 0; bottom: 0; width: 34px; border: 0; border-radius: 0 6px 6px 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--panel) 94%, transparent) 34%); color: inherit; display: none; place-items: center; cursor: pointer; padding: 0; font-size: 14px; }
 .attachment-pill:hover .remove-pill { display: grid; }
 .remove-pill:hover { color: var(--text); }
-.input-line { min-height: 47px; padding: 9px 12px 6px; display: flex; gap: 8px; align-items: flex-start; }
+.input-line { min-height: 30px; padding: 7px 12px 5px; display: flex; gap: 8px; align-items: flex-start; }
 .prompt-skill { color: var(--primary); font-size: 14px; line-height: 21px; font-weight: 400; white-space: nowrap; }
-.prompt { flex: 1; min-height: 31px; max-height: 156px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
-.composer:has(.composer-top.visible) .prompt { max-height: 130px; }
+.prompt { flex: 1; min-height: 20px; max-height: 78px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
+.composer:has(.composer-top.visible) .prompt { max-height: 65px; }
 .toolbar { min-height: 44px; border-top: 1px solid var(--border-soft); padding: 7px 8px; display: flex; align-items: center; gap: 7px; }
 .tool-btn { height: 30px; min-width: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
 .tool-btn:hover { background: var(--primary-soft); color: var(--primary); }
