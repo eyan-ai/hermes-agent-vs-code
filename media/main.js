@@ -101,6 +101,12 @@ function render() {
   const messages = session.messages || [];
   const running = messages.some(message => message.role === "assistant" && message.status === "running");
   state.running = running;
+  // Preserve scroll: remember whether we were pinned to the bottom (live
+  // streaming follows new output) and the exact scrollTop otherwise, so
+  // re-renders (copy feedback, popovers, chunks) never yank the viewport.
+  const scrollEl = document.querySelector(".scroll");
+  const nearBottom = scrollEl ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 96 : true;
+  const prevScrollTop = scrollEl ? scrollEl.scrollTop : 0;
   document.querySelector("#app").innerHTML = `
     <div class="app">
       <header class="topbar">
@@ -128,6 +134,13 @@ function render() {
   bind();
   autosizePrompt();
   updateQuestionOverflow();
+  // Restore scroll after the DOM rebuild: pinned to bottom while streaming
+  // (auto-follow latest output), exact position preserved otherwise.
+  requestAnimationFrame(() => {
+    const el = document.querySelector(".scroll");
+    if (!el) return;
+    el.scrollTop = nearBottom ? el.scrollHeight : prevScrollTop;
+  });
 }
 
 function renderDiagnostics() {
@@ -438,17 +451,23 @@ function bind() {
   document.querySelectorAll(".copy-answer").forEach(button => {
     button.addEventListener("click", () => {
       const message = activeSession().messages?.[Number(button.dataset.index)];
-      if (message?.text) {
-        vscode.postMessage({ type: "copyAnswer", text: message.text });
-        state.copiedIndex = Number(button.dataset.index);
-        render();
-        setTimeout(() => {
-          if (state.copiedIndex === Number(button.dataset.index)) {
-            state.copiedIndex = undefined;
-            render();
-          }
-        }, 2000);
-      }
+      if (!message?.text) return;
+      vscode.postMessage({ type: "copyAnswer", text: message.text });
+      state.copiedIndex = Number(button.dataset.index);
+      // In-place feedback: swap icon to a check without re-rendering the
+      // whole thread, so the viewport never jumps. Revert after 2s.
+      const revert = () => {
+        if (state.copiedIndex !== Number(button.dataset.index)) return;
+        state.copiedIndex = undefined;
+        button.classList.remove("copied");
+        button.innerHTML = icons.copy;
+        button.title = "Copy response";
+      };
+      clearTimeout(button._copyTimer);
+      button._copyTimer = setTimeout(revert, 2000);
+      button.classList.add("copied");
+      button.innerHTML = icons.check;
+      button.title = "Copied";
     });
   });
   document.querySelector("#pickBtn")?.addEventListener("click", () => vscode.postMessage({ type: "pickLocal" }));
