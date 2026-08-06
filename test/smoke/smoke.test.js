@@ -1,4 +1,5 @@
 const assert = require("assert");
+const path = require("path");
 
 exports.run = async function () {
   const vscode = require("vscode");
@@ -43,21 +44,73 @@ exports.run = async function () {
     ok("hermesAgent.newSession executed without error");
   } catch (e) { fail("hermesAgent.newSession executed", e); }
 
-  // 6. Editor-title agent button opens a NEW WINDOW, not a tab (v0.2.0 behavior)
+  // 6. Editor-title agent button opens a Hermes panel in a NEW editor group
+  //    beside the current one (v0.2.1 behavior)
   try {
     await vscode.commands.executeCommand("hermesAgent.openEditorSession");
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 1500));
     const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs);
     const webviewTabs = tabs.filter(t => t.input instanceof vscode.TabInputWebview);
-    if (webviewTabs.length === 0) ok("openEditorSession opens a new window, no tab in current window");
-    else fail("openEditorSession opens a new window, no tab in current window", `${webviewTabs.length} webview tab(s) found in current window`);
-  } catch (e) { fail("openEditorSession opens a new window", e); }
+    if (webviewTabs.length > 0) ok(`openEditorSession opens a side-by-side webview panel (${webviewTabs.length} webview tab(s))`);
+    else fail("openEditorSession opens a side-by-side webview panel", "no TabInputWebview found");
+  } catch (e) { fail("openEditorSession opens a side-by-side webview panel", e); }
 
   // 7. Session state is persisted through commands (provider writes sessions)
   try {
     await vscode.commands.executeCommand("hermesAgent.newSession");
     ok("state write exercised via newSession command");
   } catch (e) { fail("state write exercised via newSession command", e); }
+
+  // 8. Chat output parser: reasoning + tool calls + answer blocks
+  try {
+    const { createChatParser } = require(path.join(__dirname, "..", "..", "lib", "chat-parser.js"));
+    const thinking = [];
+    const tools = [];
+    const answer = [];
+    const parser = createChatParser({
+      onThinkingEnd: t => thinking.push(t),
+      onTool: t => tools.push(t),
+      onAnswerLine: l => answer.push(l)
+    });
+    parser.onChunk(`💬 Starting conversation: 'read the file'\r
+\r
+┌─ Reasoning ──────────────────────────┐\r
+The user asks to read the file. Let me do it.\r
+.\r
+└──────────────────────────────────────┘\r
+  ┊ 📖 preparing read_file…\r
+  📞 Tool 1: read_file(['path'])\r
+     Args: {\r
+       "path": "/tmp/hermes_test.txt"\r
+     }\r
+\r
+┌─ Reasoning ──────────────────────────┐\r
+✅ Tool 1 completed.\r
+└──────────────────────────────────────┘\r
+\r
+╭─ ⚕ Hermes ───────────────────────────╮\r
+    The file contains "hello".\r
+╰──────────────────────────────────────╯\r
+Session:        20260806_114600_test\r
+`);
+    parser.flush();
+    const okThinking = thinking.length === 2 && thinking[0].includes("user asks");
+    const okTool = tools.length === 1 && tools[0].name === "read_file" && tools[0].args.includes('"path"');
+    const okAnswer = answer.join("\n").includes("hello") && !answer.join("\n").includes("Session:");
+    if (okThinking && okTool && okAnswer) ok("chat parser: reasoning + tool + answer blocks");
+    else fail("chat parser: reasoning + tool + answer blocks", JSON.stringify({ thinking, tools, answer }).slice(0, 300));
+  } catch (e) { fail("chat parser: reasoning + tool + answer blocks", e); }
+
+  // 9. Chat output parser: plain --oneshot fallback streams into the answer
+  try {
+    const { createChatParser } = require(path.join(__dirname, "..", "..", "lib", "chat-parser.js"));
+    const answer = [];
+    const parser = createChatParser({ onThinkingEnd: () => {}, onTool: () => {}, onAnswerLine: l => answer.push(l) });
+    parser.onChunk("Plain one-shot answer line one.\nPlain one-shot answer line two.\n");
+    parser.flush();
+    if (answer.join(" ").includes("line two")) ok("chat parser: unparsed output falls back to answer");
+    else fail("chat parser: unparsed output falls back to answer", answer.join(" | "));
+  } catch (e) { fail("chat parser: unparsed output falls back to answer", e); }
 
   // Summary
   const passed = results.filter(r => r.pass).length;

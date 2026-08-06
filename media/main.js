@@ -24,6 +24,7 @@ const state = {
   noticeDismissed: false,
   openThinking: {},
   models: [],
+  warning: "",
   settings: {
     mode: "Auto",
     model: "5.5",
@@ -115,6 +116,7 @@ function render() {
       <section class="conversation">
         <div class="scroll">
           ${renderDiagnostics()}
+          ${renderWarning()}
           ${messages.length ? renderThread(messages) : renderHero()}
         </div>
         ${renderComposer(running)}
@@ -129,6 +131,11 @@ function renderDiagnostics() {
   const diagnostics = state.diagnostics || [];
   if (!diagnostics.length) return "";
   return `<div class="diagnostics">${diagnostics.map(item => `<div class="diagnostic ${h(item.kind || "warning")}"><strong>${h(item.title)}</strong><span>${h(item.message)}</span></div>`).join("")}</div>`;
+}
+
+function renderWarning() {
+  if (!state.warning) return "";
+  return `<div class="warning-bar">${icons.bolt}<span>${h(state.warning)}</span><button class="warning-close" id="warningClose" type="button" title="Dismiss" aria-label="Dismiss">×</button></div>`;
 }
 
 function autosizePrompt() {
@@ -234,14 +241,16 @@ function renderAssistant(message, index, messages) {
   const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
   const questionIndex = findQuestionIndex(messages, index);
   const thinkingOpen = Boolean(state.openThinking[message.id]) || running;
-  const chevron = icons.chevron.replace("<svg", '<svg class="chev"');
+  const caret = icons.chevron.replace("<svg", '<svg class="thinking-caret"').replace('d="m6 4 4 4-4 4"', 'd="m4 6 4 4 4-4"');
   return `<div class="assistant">
     <div class="run-header">
-      <button class="thinking-toggle ${running ? "running" : ""} ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}">${running ? "Thinking" : `Worked for 0m ${worked}s`}${chevron}</button>
-      <span>${h(state.settings.model)} ${h(state.settings.effort)}</span>
+      <button class="thinking-toggle ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}" aria-expanded="${thinkingOpen}">
+        <span class="run-label">${running ? "Working" : `Worked for 0m ${worked}s`}</span>${caret}
+      </button>
+      <span>${h(state.settings.mode)} · ${h(state.settings.model)} · ${h(state.settings.effort)}</span>
     </div>
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
-      ${(message.thinking || []).map(step => `<div class="step"><span class="dot ${step.kind === "success" ? "success" : step.kind === "error" ? "error" : ""}"></span><div><strong>${h(step.title)}</strong><div>${h(step.text)}</div></div></div>`).join("")}
+      ${(message.thinking || []).map(step => renderThinkingStep(step)).join("")}
     </div>
     <div class="answer">${window.markdownToHtml ? window.markdownToHtml(message.text) : h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
@@ -258,6 +267,19 @@ function findQuestionIndex(messages, assistantIndex) {
   return -1;
 }
 
+function renderThinkingStep(step) {
+  const kind = step.kind === "tool" ? "tool" : step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
+  const text = step.text || "";
+  const trimmed = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+  return `<div class="timeline-item ${kind}-item">
+    <span class="timeline-dot ${kind}"></span>
+    <div class="timeline-body">
+      <div class="timeline-title"><strong>${h(step.title || (kind === "tool" ? "Tool" : "Thinking"))}</strong></div>
+      ${trimmed ? `<p>${h(trimmed)}</p>` : ""}
+    </div>
+  </div>`;
+}
+
 function renderAttachment(item) {
   return `<button class="attachment" type="button" title="${h(item.name)}" data-uri="${h(item.uri || "")}">${glyphFor(item.type)}<span class="attachment-name">${h(item.name)}</span></button>`;
 }
@@ -269,16 +291,23 @@ function glyphFor(type) {
 function renderPopovers() {
   return `<div class="popover ${state.contextOpen ? "open" : ""}" id="contextPopover">
       <div class="popover-head"><span>Add workspace context</span></div>
-      <div class="option-list">${state.workspaceItems.map(item => `<button class="option" type="button" data-path="${h(item.path)}">${item.type === "folder" ? icons.folder : icons.file}<span>${h(item.name)}</span><small>${h(item.path)}</small></button>`).join("")}</div>
+      <div class="option-list">${state.workspaceItems.length ? state.workspaceItems.map(item => `<button class="option" type="button" data-path="${h(item.path)}">${item.type === "folder" ? icons.folder : icons.file}<span>${h(item.name)}</span><small>${h(item.path)}</small></button>`).join("") : `<div class="option-empty">No files found</div>`}</div>
     </div>
     <div class="popover ${state.skillOpen ? "open" : ""}" id="skillPopover">
       <div class="popover-head"><span>Skills</span></div>
       <div class="skill-list">${(state.settings.skills || []).map(skill => `<button class="skill-option" type="button" data-skill="${h(skill.name)}"><span>/${h(skill.name)}</span><span class="skill-desc">${h(skill.description || "")}</span></button>`).join("")}</div>
     </div>
     <div class="popover ${state.settingsOpen ? "open" : ""}" id="modePopover">
-      <div class="popover-head"><span>Run settings</span></div>
+      <div class="popover-head"><span>Run settings</span><button class="mini-btn" id="resetMode" type="button">Reset</button></div>
       <div class="mode-panel">
-        ${["Manual", "Auto"].map(mode => `<button class="mode-option ${state.settings.mode === mode ? "active" : ""}" data-mode="${mode}" type="button"><span>${mode === "Manual" ? "✋" : "⚡"}</span><span>${mode}</span><span>${state.settings.mode === mode ? "✓" : ""}</span></button>`).join("")}
+        <div class="settings-row modes-title"><span>Mode</span><span class="settings-value">${h(state.settings.mode)}</span></div>
+        <div class="mode-picker">
+          ${["Manual", "Auto"].map(mode => `<button class="approval-option ${state.settings.mode === mode ? "active" : ""}" data-mode="${mode}" type="button">
+            <span>${mode === "Manual" ? "✋" : "⚡"}</span>
+            <span><strong>${mode}</strong><span>${mode === "Manual" ? "Always ask for approval before making each edit." : "Only ask for approval when actions detected as potentially unsafe."}</span></span>
+            <span>${state.settings.mode === mode ? "✓" : ""}</span>
+          </button>`).join("")}
+        </div>
         <label class="settings-row"><span>Model</span><select class="mode-select" id="modelSelect">${modelOptions()}</select></label>
         <label class="settings-row"><span>Effort</span><select class="mode-select" id="effortSelect">${["Low", "Medium", "High"].map(effort => `<option ${state.settings.effort === effort ? "selected" : ""}>${effort}</option>`).join("")}</select></label>
       </div>
@@ -307,7 +336,7 @@ function renderComposer(running) {
         <button class="tool-btn" id="pickBtn" type="button" title="Add files or folders" aria-label="Add files or folders">${icons.add}</button>
         <div class="divider"></div>
         <div class="context-strip">${context ? `<button class="context-chip" id="contextChip" type="button">${context.type === "selection" ? icons.selection : icons.file}<span>${h(context.name)}</span></button>` : `<span class="context-chip">${icons.file}<span>Editor context off</span></span>`}</div>
-        <button class="tool-btn" id="modeBtn" type="button"><strong>${h(state.settings.model)} ${h(state.settings.effort)}</strong></button>
+        <button class="tool-btn" id="modeBtn" type="button" title="Run settings"><span class="mode-label">${h(state.settings.mode)} · ${h(state.settings.model)} · ${h(state.settings.effort)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
         <button class="send ${running || canSubmit() ? "ready" : ""} ${running ? "stop" : ""}" id="sendBtn" type="button">${running ? icons.stop : icons.send}</button>
       </div>
     </div>
@@ -447,12 +476,23 @@ function bind() {
       render();
     });
   });
-  document.querySelectorAll(".mode-option").forEach(button => {
+  document.querySelectorAll(".approval-option").forEach(button => {
     button.addEventListener("click", () => {
       state.settings.mode = button.dataset.mode;
       settingsChanged();
       render();
     });
+  });
+  document.querySelector("#resetMode")?.addEventListener("click", () => {
+    state.settings.mode = "Auto";
+    state.settings.model = state.models[0] || "5.5";
+    state.settings.effort = "Medium";
+    settingsChanged();
+    render();
+  });
+  document.querySelector("#warningClose")?.addEventListener("click", () => {
+    state.warning = "";
+    render();
   });
   document.querySelector("#modelSelect")?.addEventListener("change", event => {
     state.settings.model = event.target.value;
@@ -541,6 +581,13 @@ function submit() {
   const prompt = document.querySelector("#prompt")?.value || "";
   state.draft = prompt;
   if (!state.draft.trim() && !state.attachments.length && !state.skill && !currentContextAttachment()) return;
+  // Trigger-time model availability check: only warn when the user actually
+  // sends with a model that is not in the installed list, and let them dismiss.
+  if (state.models.length && !state.models.includes(state.settings.model)) {
+    state.warning = `Model "${state.settings.model}" is not in the installed Hermes model list. It may fail at runtime.`;
+  } else {
+    state.warning = "";
+  }
   vscode.postMessage({
     type: "sendPrompt",
     prompt: state.draft,
@@ -554,6 +601,7 @@ function submit() {
   state.skill = "";
   state.draft = "";
   state.modifyingIndex = null;
+  render();
 }
 
 window.addEventListener("message", event => {
@@ -586,6 +634,12 @@ window.addEventListener("message", event => {
     const session = activeSession();
     const assistant = session.messages?.find(item => item.id === message.messageId);
     if (assistant) assistant.text += message.chunk;
+    render();
+  }
+  if (message.type === "thinkingUpdate") {
+    const session = activeSession();
+    const assistant = session.messages?.find(item => item.id === message.messageId);
+    if (assistant) assistant.thinking = message.thinking || [];
     render();
   }
   if (message.type === "focusInput") {

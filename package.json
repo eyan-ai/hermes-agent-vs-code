@@ -2,7 +2,7 @@
   "name": "hermes-agent",
   "displayName": "Hermes Agent",
   "description": "Hermes Agent chat sidebar for VS Code with editor-aware context, workspace file references, skills, sessions, and approval modes.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "hermes-agent",
   "license": "MIT",
   "repository": {
@@ -27,8 +27,7 @@
     "onView:hermesAgent.sidebar",
     "onCommand:hermesAgent.open",
     "onCommand:hermesAgent.openEditorSession",
-    "onCommand:hermesAgent.newSession",
-    "onStartupFinished"
+    "onCommand:hermesAgent.newSession"
   ],
   "icon": "resources/nous-girl.png",
   "main": "./extension.js",
@@ -89,11 +88,13 @@
             "type": "string"
           },
           "default": [
-            "--oneshot",
-            "{{prompt}}"
+            "chat",
+            "-q",
+            "{{prompt}}",
+            "-v"
           ],
           "scope": "machine",
-          "description": "Arguments passed to hermesAgent.command. Use {{prompt}} where the composed prompt should be inserted. Default uses Hermes one-shot mode for clean final output."
+          "description": "Arguments passed to hermesAgent.command. Use {{prompt}} where the composed prompt should be inserted. Default uses `hermes chat -q -v` so reasoning steps and tool calls stream into the sidebar; plain `--oneshot` output still works as a fallback."
         },
         "hermesAgent.defaultMode": {
           "type": "string",

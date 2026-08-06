@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.2
+
+- Editor-title agent button opens a Hermes panel in a new editor group beside the current one (same window, side by side).
+- Run settings popover redesigned to match the UI spec: Mode title with current-value echo, Manual/Auto options with descriptions ("Always ask for approval before making each edit." / "Only ask for approval when actions detected as potentially unsafe."), separate Model and Effort rows.
+- Model list stays in sync with the real Hermes CLI; the "model unavailable" warning now appears only when a send is attempted with an unknown model, and is dismissible.
+- Reasoning and tool calls now stream live: the default command is `hermes chat -q "{{prompt}}" -v`, and a stream parser turns reasoning blocks into timeline steps, `Tool N` calls into tool steps, and the Hermes answer block into the response text (plain `--oneshot` output still works as a fallback).
+- Running label changed "Thinking" → "Working", smaller and not bold.
+- Thinking timeline matches the UI spec: connected dots on a vertical line, expand/collapse caret, collapsed after the run.
+- Typography pass: non-title text (file list empty state, run-settings echo, skill labels, etc.) is no longer bolded.
+- Chat output parser extracted to `lib/chat-parser.js` with unit tests in the smoke suite.
+
 ## 0.2.1
 
 - Assistant answers are now rendered as Markdown: heading hierarchy (h1-h6), bold/italic/strikethrough, ordered and unordered lists, blockquotes, inline and fenced code blocks, and external links (opened via the system browser). Rendering is whitelist-only — raw HTML in answers is escaped.

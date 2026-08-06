@@ -3,6 +3,7 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 const { spawn } = require("child_process");
+const { createChatParser } = require("./lib/chat-parser");
 
 const VIEW_ID = "hermesAgent.sidebar";
 const SESSION_KEY = "hermesAgent.sessions";
@@ -66,6 +67,7 @@ function hermesModels() {
   return ids;
 }
 
+
 function activate(context) {
   const provider = new HermesSidebarProvider(context);
   context.subscriptions.push(
@@ -87,12 +89,6 @@ function activate(context) {
     vscode.window.onDidChangeActiveTextEditor(() => provider.refreshEditorContext()),
     vscode.window.onDidChangeTextEditorSelection(() => provider.refreshEditorContext())
   );
-  // A new window opened via openEditorSession asks the extension to auto-open
-  // the Hermes editor panel once it has finished starting up.
-  if (context.globalState.get("hermesAgent.openOnStartup")) {
-    context.globalState.update("hermesAgent.openOnStartup", false);
-    setTimeout(() => provider.openEditorPanel(), 900);
-  }
 }
 
 function deactivate() {}
@@ -161,18 +157,13 @@ class HermesSidebarProvider {
   }
 
   async openEditorSession() {
-    // The editor-title agent button opens a brand-new workbench window
-    // instead of a tab in the current window.
-    await this.context.globalState.update("hermesAgent.openOnStartup", true);
-    await vscode.commands.executeCommand("workbench.action.newWindow");
-  }
-
-  async openEditorPanel() {
+    // The editor-title agent button opens a Hermes panel in a NEW editor
+    // group beside the current one — same window, two columns side by side.
     const session = await this.newSession();
     const panel = vscode.window.createWebviewPanel(
       "hermesAgent.editorSession",
       session.title || "Hermes Agent",
-      vscode.ViewColumn.Active,
+      vscode.ViewColumn.Beside,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -441,16 +432,32 @@ class HermesSidebarProvider {
         shell: process.platform === "win32"
       });
       this.runningProcess = child;
-      child.stdout.on("data", data => {
-        const chunk = data.toString();
-        assistantMessage.text += chunk;
-        this.post({ type: "assistantChunk", sessionId: session.id, messageId: assistantMessage.id, chunk });
+      // Parse `hermes chat -q ... -v` output: reasoning blocks become
+      // thinking steps, `📞 Tool N` calls become tool steps, and the
+      // final `╭─ Hermes ╮` block streams as the answer text.
+      const pushThinking = () => {
+        this.post({ type: "thinkingUpdate", sessionId: session.id, messageId: assistantMessage.id, thinking: assistantMessage.thinking.map(step => ({ ...step })) });
+      };
+      const parser = createChatParser({
+        onThinkingEnd: text => {
+          assistantMessage.thinking.push({ kind: "thinking", title: "Thinking", text });
+          pushThinking();
+        },
+        onTool: tool => {
+          assistantMessage.thinking.push({ kind: "tool", title: tool.name, text: tool.args || "Invoked tool." });
+          pushThinking();
+        },
+        onAnswerLine: line => {
+          assistantMessage.text += `${line}\n`;
+          this.post({ type: "assistantChunk", sessionId: session.id, messageId: assistantMessage.id, chunk: `${line}\n` });
+        }
       });
+      child.stdout.on("data", data => parser.onChunk(data.toString()));
+      child.stdout.on("end", () => parser.flush());
       child.stderr.on("data", data => {
         const chunk = data.toString();
-        assistantMessage.text += `\n${chunk}`;
         assistantMessage.thinking.push({ kind: "error", title: "stderr", text: chunk.trim() });
-        this.post({ type: "assistantChunk", sessionId: session.id, messageId: assistantMessage.id, chunk: `\n${chunk}` });
+        pushThinking();
       });
       child.on("error", error => {
         assistantMessage.status = "failed";
@@ -594,13 +601,6 @@ function buildDiagnostics(command, model, models = hermesModels()) {
       kind: "warning",
       title: "Agent backend not connected",
       message: "Hermes CLI is not configured. Responses are local previews until hermesAgent.command is set."
-    });
-  }
-  if (model && models.length > 0 && !models.includes(model)) {
-    diagnostics.push({
-      kind: "warning",
-      title: "Model may be unavailable",
-      message: `${model} is not in the installed model list. Pick another model or update Hermes Agent.`
     });
   }
   return diagnostics;
