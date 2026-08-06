@@ -179,6 +179,8 @@ class HermesSidebarProvider {
     this.sessions.unshift(session);
     this.activeSessionId = session.id;
     await this.saveSessions();
+    // Surface the active document as default context immediately.
+    this.refreshEditorContext();
     this.postState();
     return session;
   }

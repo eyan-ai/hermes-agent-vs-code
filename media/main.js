@@ -107,7 +107,7 @@ function attachmentsForMessage(message) {
 }
 
 function canSubmit() {
-  return Boolean(state.draft.trim() || state.attachments.length || state.skill || currentContextAttachment());
+  return Boolean(state.draft.trim() || state.attachments.length || state.skill);
 }
 
 function updateSend() {
@@ -737,7 +737,7 @@ function submit() {
   }
   const prompt = document.querySelector("#prompt")?.value || "";
   state.draft = prompt;
-  if (!state.draft.trim() && !state.attachments.length && !state.skill && !currentContextAttachment()) return;
+  if (!state.draft.trim() && !state.attachments.length && !state.skill) return;
   vscode.postMessage({
     type: "sendPrompt",
     prompt: state.draft,
