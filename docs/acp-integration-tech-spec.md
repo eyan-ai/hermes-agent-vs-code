@@ -75,14 +75,16 @@ const child = spawn("hermes", ["acp"], {
 
 ### 2.2 方法调用序列
 
-| 顺序 | 方法 | 作用 |
-|---|---|---|
-| 1 | `initialize` | 握手，协商协议版本（`acp.PROTOCOL_VERSION`），返回模型列表、能力 |
-| 2 | `new_session {cwd}` | 建会话，返回 `session_id` |
-| 3 | `prompt {session_id, text}` | 发消息，**返回即触发整轮 agent 循环** |
-| 4 | `cancel {session_id}` | 中断 |
-| 5 | `load_session / resume_session` | 历史回放（见 §5） |
-| 6 | `set_session_model / set_session_mode` | 运行时切模型/模式 |
+| 顺序 | 方法（线上名） | 类型 | 作用 |
+|---|---|---|---|
+| 1 | `initialize` | request | 握手，协商协议版本（`acp.PROTOCOL_VERSION`=1），返回模型列表、能力 |
+| 2 | `session/new` | request | 建会话，返回 `sessionId`（**参数需 `mcpServers: []`，必填**） |
+| 3 | `session/prompt` | request | 发消息，**返回即触发整轮 agent 循环** |
+| 4 | `session/cancel` | **notification** | 中断（无响应，fire-and-forget） |
+| 5 | `session/load` / `session/resume` | request | 历史回放（见 §5） |
+| 6 | `session/set_model` / `session/set_mode` | request | 运行时切模型/模式 |
+
+⚠️ **实测踩坑**：方法名是命名空间形式 `session/new`、`session/prompt`、`session/cancel`（不是 `new_session`/`prompt`/`cancel`），所有参数名用 **camelCase**（`sessionId`/`mcpServers`/`messageId`）。这些细节只有真跑一遍 `hermes acp` 才能确认——e2e 测试脚本 `test/e2e-acp-test.js` 已验证。
 
 ### 2.3 服务端推送（通知，无 id）
 
@@ -91,12 +93,14 @@ const child = spawn("hermes", ["acp"], {
 | update 类型 | 对应 UI | 等价桌面事件 |
 |---|---|---|
 | `agent_thought_chunk` | **Thinking 折叠块**（流式） | `reasoning.delta` |
-| `tool_call`（start） | **工具卡片**（标题+参数+位置） | `tool.start` |
-| `tool_call`（progress） | **工具卡片**（completed/failed+结果） | `tool.complete` |
+| `tool_call`（ToolCallStart） | **工具卡片**（新建，running） | `tool.start` |
+| `tool_call_update`（ToolCallProgress） | **工具卡片**（completed/failed+结果） | `tool.complete` |
 | `agent_message_chunk` | **正文流式渲染** | `message.delta` |
 | `usage_update` | 费用/token | — |
 | `session_info_update` | 标题/模型 | `session.info` |
 | `agent_plan_update` | 计划列表（todo 工具驱动） | — |
+
+⚠️ **注意**：工具开始和完成是**两个不同事件类型**（`tool_call` 与 `tool_call_update`），不是同一事件的 status 变化——渲染器必须分开处理（实测确认）。
 
 ---
 

@@ -2,7 +2,7 @@
   "name": "hermes-agent",
   "displayName": "Hermes Agent",
   "description": "Hermes Agent chat sidebar for VS Code with editor-aware context, workspace file references, skills, sessions, and approval modes.",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "publisher": "hermes-agent",
   "license": "MIT",
   "repository": {
@@ -83,18 +83,24 @@
           "description": "Hermes Agent CLI command. When empty, the extension uses a local mock streaming response."
         },
         "hermesAgent.commandArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "chat",
-            "-q",
-            "{{prompt}}",
-            "-v"
-          ],
-          "scope": "machine",
-          "description": "Arguments passed to hermesAgent.command. Use {{prompt}} where the composed prompt should be inserted. Default uses `hermes chat -q -v` so reasoning steps and tool calls stream into the sidebar; plain `--oneshot` output still works as a fallback."
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "default": [
+          "chat",
+          "-q",
+          "{{prompt}}",
+          "-v"
+         ],
+         "scope": "machine",
+         "description": "Arguments passed to hermesAgent.command (CLI fallback mode only). Use {{prompt}} where the composed prompt should be inserted. Default uses `hermes chat -q -v` so reasoning steps and tool calls stream into the sidebar; plain `--oneshot` output still works as a fallback."
+        },
+        "hermesAgent.useAcp": {
+         "type": "boolean",
+         "default": true,
+         "scope": "machine",
+         "description": "Use the ACP protocol (`hermes acp`) for structured streaming of thinking blocks, tool calls, and answers. When false, falls back to parsing `hermes chat -q -v` output. ACP requires the hermes-agent[acp] extra installed."
         },
         "hermesAgent.defaultMode": {
           "type": "string",

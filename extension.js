@@ -4,6 +4,8 @@ const os = require("os");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const { createChatParser } = require("./lib/chat-parser");
+const { AcpClient } = require("./lib/acp-client");
+const { createAcpRenderer } = require("./lib/acp-render");
 
 const VIEW_ID = "hermesAgent.sidebar";
 const SESSION_KEY = "hermesAgent.sessions";
@@ -107,6 +109,11 @@ class HermesSidebarProvider {
     this.activeSessionId = this.sessions[0]?.id;
     this.runningProcess = undefined;
     this.lastActiveEditor = vscode.window.activeTextEditor;
+    // ACP transport state (lazy): one shared `hermes acp` process for all
+    // sessions; per-session mapping uiSession.id → acp session_id.
+    this.acp = undefined;
+    this.acpSessions = new Map();
+    this.acpRenderers = new Map();
   }
 
   resolveWebviewView(view) {
@@ -272,6 +279,13 @@ class HermesSidebarProvider {
     if (this.sessions.length <= 1) return;
     const index = this.sessions.findIndex(item => item.id === id);
     if (index < 0) return;
+    // Drop the ACP session mapping (the server session stays alive until
+    // its process exits; the renderer is gone with the UI session).
+    const acpSessionId = this.acpSessions.get(id);
+    if (acpSessionId) {
+      this.acpRenderers.delete(acpSessionId);
+      this.acpSessions.delete(id);
+    }
     this.sessions.splice(index, 1);
     if (this.activeSessionId === id) {
       this.activeSessionId = this.sessions[Math.max(0, index - 1)]?.id || this.sessions[0]?.id;
@@ -393,13 +407,129 @@ class HermesSidebarProvider {
   async runAgent(prompt, userMessage, assistantMessage) {
     const config = vscode.workspace.getConfiguration("hermesAgent");
     const command = config.get("command", "");
-    const args = config.get("commandArgs", []);
     if (!command) {
       assistantMessage.thinking.push({ kind: "error", title: "Agent backend not connected", text: "hermesAgent.command is empty. Using local preview response." });
       await this.mockStream(prompt, userMessage, assistantMessage);
       return;
     }
-    await this.runCli(command, args, prompt, userMessage, assistantMessage);
+    const useAcp = config.get("useAcp", true);
+    if (useAcp) {
+      try {
+        await this.runAcp(command, prompt, userMessage, assistantMessage);
+        return;
+      } catch (err) {
+        // ACP failed (missing extra, protocol error, …) — surface once, then
+        // fall back to the CLI parser path so the extension still works.
+        assistantMessage.thinking.push({ kind: "error", title: "ACP unavailable", text: `${err.message || err}\nFalling back to CLI output parsing.` });
+        this.postState();
+      }
+    }
+    await this.runCli(command, config.get("commandArgs", []), prompt, userMessage, assistantMessage);
+  }
+
+  /**
+   * Run one turn through the ACP transport (`hermes acp`).
+   *
+   * Streams structured session updates (thinking chunks, tool calls, message
+   * deltas) into the SAME UI message protocol the CLI parser used, so the
+   * webview is untouched.
+   */
+  async runAcp(command, prompt, userMessage, assistantMessage) {
+    const session = this.activeSession();
+    const client = await this.ensureAcp(command);
+    let acpSessionId = this.acpSessions.get(session.id);
+    if (!acpSessionId) {
+      const created = await client.request("session/new", { cwd: this.workspaceCwd(), mcpServers: [] });
+      acpSessionId = created.sessionId;
+      this.acpSessions.set(session.id, acpSessionId);
+    }
+
+    // Per-session renderer: ACP updates → thinking steps / answer chunks.
+    const renderer = createAcpRenderer({ assistantMessage, post: msg => this.post(msg), session });
+    this.acpRenderers.set(acpSessionId, renderer);
+
+    const composed = composeHermesPrompt(prompt, userMessage);
+    const finishReason = await client.request("session/prompt", {
+      sessionId: acpSessionId,
+      prompt: [{ type: "text", text: composed }]
+    });
+
+    if (assistantMessage.status === "running") {
+      renderer.finalize(finishReason && finishReason.stopReason === "refusal" ? "failed" : "done");
+    }
+    this.acpRenderers.delete(acpSessionId);
+    await this.saveSessions();
+    this.postState();
+  }
+
+  /** Lazily spawn `hermes acp` once and wire the session/update handler. */
+  async ensureAcp(command) {
+    if (this.acp) return this.acp;
+    const client = new AcpClient({
+      command,
+      args: ["acp"],
+      cwd: this.workspaceCwd(),
+      handlers: {
+        onSessionUpdate: (update, acpSessionId) => {
+          const renderer = this.acpRenderers.get(acpSessionId);
+          if (renderer) renderer.onSessionUpdate(update);
+        },
+        onError: err => {
+          vscode.window.showWarningMessage(`Hermes ACP: ${err.message}`);
+        },
+        onExit: code => {
+          // Process died — fail any in-flight renderers.
+          for (const renderer of this.acpRenderers.values()) {
+            renderer.finalize("failed");
+          }
+          this.acpRenderers.clear();
+          this.acp = undefined;
+          this.acpSessions.clear();
+          if (code) vscode.window.showWarningMessage(`Hermes ACP exited (code ${code}).`);
+        },
+        onStderr: line => {
+          if (/error|traceback/i.test(line)) {
+            const session = this.activeSession();
+            const last = [...session.messages].reverse().find(message => message.role === "assistant" && message.status === "running");
+            if (last && !last._acpStderrNoted) {
+              last._acpStderrNoted = true;
+              last.thinking.push({ kind: "error", title: "stderr", text: line.slice(0, 1000) });
+              this.post({ type: "thinkingUpdate", sessionId: session.id, messageId: last.id, thinking: last.thinking.map(step => ({ ...step })) });
+            }
+          }
+        }
+      }
+    });
+    try {
+      await client.start();
+      await client.request("initialize", {
+        protocolVersion: 1,
+        clientCapabilities: {},
+        clientInfo: { name: "hermes-agent-vscode", version: "0.2.8" }
+      });
+    } catch (err) {
+      client.kill();
+      throw err;
+    }
+    this.acp = client;
+    return client;
+  }
+
+  /** Cancel the ACP turn for the active session (keeps the process alive). */
+  async acpStop() {
+    const session = this.activeSession();
+    const acpSessionId = this.acpSessions.get(session.id);
+    if (this.acp && acpSessionId) {
+      // session/cancel is a JSON-RPC notification (no response) per ACP spec.
+      this.acp.notify("session/cancel", { sessionId: acpSessionId });
+    }
+    const renderer = this.acpRenderers.get(acpSessionId);
+    if (renderer) renderer.finalize("stopped");
+    this.acpRenderers.delete(acpSessionId);
+  }
+
+  workspaceCwd() {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
   }
 
   async mockStream(prompt, userMessage, assistantMessage) {
@@ -516,6 +646,10 @@ class HermesSidebarProvider {
     if (this.runningProcess) {
       this.runningProcess.kill();
       this.runningProcess = undefined;
+    }
+    if (this.acp) {
+      this.acpStop();
+      return;
     }
     const session = this.activeSession();
     const last = [...session.messages].reverse().find(message => message.role === "assistant" && message.status === "running");
