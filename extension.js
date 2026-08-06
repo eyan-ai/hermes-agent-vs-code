@@ -203,12 +203,26 @@ class HermesSidebarProvider {
       }
     );
     panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, "resources", "nous-girl.png");
+    // Bind the tab to its session so the title follows the session title.
+    panel.sessionId = session.id;
     this.panels.add(panel);
     this.configureWebview(panel.webview);
     panel.onDidDispose(() => {
       this.panels.delete(panel);
     });
     this.refreshEditorContext();
+  }
+
+  /** Keep editor-session tab titles in sync with their session title. */
+  updatePanelTitles() {
+    for (const panel of this.panels) {
+      if (panel.sessionId) {
+        const session = this.sessions.find(s => s.id === panel.sessionId);
+        if (session && session.title && session.title !== "Untitled") {
+          panel.title = session.title;
+        }
+      }
+    }
   }
 
   findAgentColumn() {
@@ -409,12 +423,22 @@ class HermesSidebarProvider {
   }
 
   findDocumentColumn() {
+    // Documents must NEVER open in a column hosting the Hermes agent panel.
+    // Prefer an existing text-editor column, then any non-agent column, and
+    // only as a last resort open a fresh column beside the current one.
+    const agentColumns = new Set(
+      [...this.panels].map(panel => panel.viewColumn).filter(value => value !== undefined)
+    );
     for (const group of vscode.window.tabGroups.all) {
+      if (agentColumns.has(group.viewColumn)) continue;
       if (group.tabs.some(tab => tab.input instanceof vscode.TabInputText)) {
         return group.viewColumn;
       }
     }
-    return vscode.ViewColumn.One;
+    for (const group of vscode.window.tabGroups.all) {
+      if (!agentColumns.has(group.viewColumn)) return group.viewColumn;
+    }
+    return vscode.ViewColumn.Beside;
   }
 
   async sendPrompt(message) {
@@ -671,8 +695,15 @@ class HermesSidebarProvider {
       this.acp.notify("session/cancel", { sessionId: acpSessionId });
     }
     const renderer = this.acpRenderers.get(acpSessionId);
-    if (renderer) renderer.finalize("stopped");
-    this.acpRenderers.delete(acpSessionId);
+    if (renderer) {
+      renderer.finalize("stopped");
+      this.acpRenderers.delete(acpSessionId);
+      // finalize() only posts a thinking update — push the full state so
+      // the webview flips the message out of "running" and the stop button
+      // returns to send immediately.
+      await this.saveSessions();
+      this.postState();
+    }
   }
 
   /**
@@ -795,7 +826,12 @@ class HermesSidebarProvider {
   }
 
   workspaceCwd() {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
+    // The extension's working environment is the VS Code folder. Without a
+    // folder, use a dedicated temp dir instead of the home directory so
+    // sessions never mingle with desktop Hermes' home-based sessions.
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (folder) return folder;
+    return path.join(os.tmpdir(), "hermes-agent-vscode");
   }
 
   async mockStream(prompt, userMessage, assistantMessage) {
@@ -934,25 +970,22 @@ class HermesSidebarProvider {
   }
 
   postState() {
+    // Editor-session tab titles follow their session title.
+    this.updatePanelTitles();
     const config = vscode.workspace.getConfiguration("hermesAgent");
     const command = config.get("command", "");
-    const models = hermesModels();
-    // Echo what the user actually picked in the session first; fall back to
-    // VS Code settings / hermes config / first catalog model.
+    // Run settings expose ONLY the approval mode (per round-4 feedback):
+    // no model / effort configuration or echo.
     const sessionSettings = this.activeSession().settings || {};
-    const model = sessionSettings.model || config.get("model", "") || hermesConfig().model || models[0] || "";
     this.post({
       type: "state",
       activeSessionId: this.activeSessionId,
       sessions: this.sessions,
       settings: {
         mode: sessionSettings.mode || config.get("defaultMode", "Auto"),
-        model,
-        effort: sessionSettings.effort || config.get("effort", "Medium"),
         skills: sessionSettings.skills && sessionSettings.skills.length ? sessionSettings.skills : config.get("skills", [])
       },
-      models,
-      diagnostics: buildDiagnostics(command, model, models),
+      diagnostics: buildDiagnostics(command),
       editorContext: this.getEditorContext()
     });
   }
@@ -1053,7 +1086,7 @@ function cloneMessage(message) {
   return { ...JSON.parse(JSON.stringify(message)), id: id() };
 }
 
-function buildDiagnostics(command, model, models = hermesModels()) {
+function buildDiagnostics(command) {
   const diagnostics = [];
   if (!command) {
     diagnostics.push({

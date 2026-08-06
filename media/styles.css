@@ -113,8 +113,9 @@ button { color: inherit; }
 .thinking-toggle { min-width: 0; border: 0; background: transparent; color: var(--muted); padding: 0; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; line-height: 20px; font-weight: 400; }
 .thinking-toggle .thinking-caret { width: 14px; height: 14px; flex: 0 0 auto; transition: transform .14s ease; }
 .thinking-toggle:not(.open) .thinking-caret { transform: rotate(-90deg); }
-.thinking-toggle.running::after { content: ""; width: 10px; height: 10px; flex: 0 0 auto; border-radius: 99px; border: 1.5px solid color-mix(in srgb, var(--muted) 40%, transparent); border-top-color: var(--primary); animation: workingSpin .8s linear infinite; }
-@keyframes workingSpin { to { transform: rotate(360deg); } }
+/* Working state: pulsing neutral dot (design parity), not a spinner. */
+.thinking-toggle.running::before { content: ""; width: 8px; height: 8px; border-radius: 99px; background: #9a9a9a; animation: thinkingPulse 1.25s ease-in-out infinite; flex: 0 0 auto; }
+@keyframes thinkingPulse { 0%, 100% { opacity: .42; transform: scale(.86); } 50% { opacity: 1; transform: scale(1); } }
 .run-header > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400; }
 .thinking { display: grid; gap: 0; margin: 2px 0; padding-left: 6px; }
 .thinking.collapsed { display: none; }
@@ -146,7 +147,7 @@ button { color: inherit; }
 .io-block { margin: 4px 0 2px; }
 .io-label { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px; color: var(--primary); border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 4px; padding: 0 5px; margin-bottom: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .io-block .code-sample { margin-top: 2px; }
-.code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid light-dark(rgba(0,0,0,.08), rgba(255,255,255,.08)); background: light-dark(#f4f5f7, #1d1f22); color: light-dark(#3a3f47, #c9d1d9); overflow: auto; max-height: 33vh; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid light-dark(rgba(0,0,0,.08), rgba(255,255,255,.08)); background: light-dark(#f4f5f7, #101114); color: light-dark(#3a3f47, #c9d1d9); overflow: auto; max-height: 33vh; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: normal; word-break: break-word; }
 .answer > :first-child { margin-top: 0; }
 .answer h1, .answer h2, .answer h3, .answer h4, .answer h5, .answer h6 { margin: 16px 0 6px; line-height: 1.35; font-weight: 650; }
@@ -159,7 +160,7 @@ button { color: inherit; }
 .answer ul, .answer ol { margin: 7px 0; padding-left: 20px; }
 .answer li { margin: 3px 0; }
 .answer code { border-radius: 5px; background: light-dark(rgba(0,0,0,.06), rgba(255,255,255,.09)); padding: 1px 5px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: inherit; }
-.answer pre { margin: 9px 0; padding: 10px 12px; border-radius: 8px; background: light-dark(#f4f5f7, #1d1f22); border: 1px solid light-dark(rgba(0,0,0,.08), rgba(255,255,255,.08)); overflow: auto; max-height: 33vh; color: light-dark(#3a3f47, #c9d1d9); }
+.answer pre { margin: 9px 0; padding: 10px 12px; border-radius: 8px; background: light-dark(#f4f5f7, #101114); border: 1px solid light-dark(rgba(0,0,0,.08), rgba(255,255,255,.08)); overflow: auto; max-height: 33vh; color: light-dark(#3a3f47, #c9d1d9); }
 .answer pre code { background: transparent; padding: 0; font-size: 12px; color: inherit; }
 .answer blockquote { margin: 8px 0; padding: 1px 0 1px 12px; border-left: 3px solid var(--border-soft); color: var(--muted); }
 .answer a { color: var(--primary); cursor: pointer; text-decoration: none; }
@@ -186,7 +187,7 @@ button { color: inherit; }
 .permission-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
 .permission-head .icon { width: 14px; height: 14px; color: var(--primary); }
 .permission-path { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); word-break: break-all; }
-.diff-view { border: 1px solid var(--border-soft); border-radius: 7px; overflow: hidden; max-height: 33vh; overflow-y: auto; }
+.diff-view { border: 1px solid var(--border-soft); border-radius: 7px; overflow: hidden; max-height: 33vh; overflow-y: auto; background: light-dark(#fafafa, #101114); }
 .diff-line { display: flex; gap: 6px; padding: 2px 8px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 .diff-sign { flex: 0 0 auto; font-weight: 700; }
 .diff-del { background: rgba(224, 100, 95, .14); color: #e0645f; }
@@ -249,8 +250,11 @@ button { color: inherit; }
 .composer-chip .icon { width: 14px; height: 14px; flex: 0 0 auto; }
 .composer-chip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .composer-chip:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+/* Muted (context unlinked): name stays visible but faded, eye-off icon
+   leads — per design (no bold border on the chip at any state). */
 .composer-chip.muted { color: color-mix(in srgb, var(--muted) 45%, var(--panel)); }
-.composer-chip.muted:hover { background: transparent; color: color-mix(in srgb, var(--muted) 60%, var(--panel)); }
+.composer-chip.muted .icon { opacity: .8; }
+.composer-chip.muted:hover { background: color-mix(in srgb, var(--text) 6%, transparent); color: color-mix(in srgb, var(--muted) 62%, var(--panel)); }
 .divider { width: 1px; height: 20px; background: var(--border-soft); }
 .send { width: 30px; height: 30px; border: 0; border-radius: 7px; background: color-mix(in srgb, var(--primary) 28%, light-dark(#fff, #000)); color: white; display: grid; place-items: center; flex: 0 0 auto; opacity: .5; cursor: default; }
 .send.ready, .send.stop { opacity: 1; cursor: pointer; background: var(--primary); }

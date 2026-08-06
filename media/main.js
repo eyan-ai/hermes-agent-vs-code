@@ -24,13 +24,11 @@ const state = {
   openThinking: {},
   openSteps: {},
   models: [],
-  mutedPaths: {},
+  contextMuted: false,
   copiedIndex: undefined,
   permission: null,
   settings: {
     mode: "Auto",
-    model: "5.5",
-    effort: "Medium",
     skills: []
   }
 };
@@ -44,7 +42,7 @@ const icons = {
   folder: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
   selection: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h10M4 17h13"/></svg>',
   send: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
-  stop: '<svg class="icon" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1"/></svg>',
+  stop: '<svg class="icon" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>',
   search: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   bolt: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m13 2-9 14h8l-1 6 9-14h-8z"/></svg>',
   gear: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-.6 1.8 1.8 0 0 0-1.98.36l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 .6-1 1.8 1.8 0 0 0-.36-1.98l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.8 1.8 0 0 0 9 4.6a1.8 1.8 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 .6 1.8 1.8 0 0 0 1.98-.36l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.8 1.8 0 0 0 19.4 9c.2.35.4.65.6 1h.1a2 2 0 1 1 0 4H20a1.8 1.8 0 0 0-.6 1Z"/></svg>',
@@ -95,7 +93,10 @@ function ageLabel(session) {
 function currentContextAttachment() {
   const context = state.editorContext;
   if (!context) return null;
-  if (state.mutedPaths[context.path]) return null;
+  // Muting is a global switch: once the user unlinks the default context it
+  // stays unlinked across document switches, but the chip keeps showing the
+  // document that WOULD be referenced (see renderComposer).
+  if (state.contextMuted) return null;
   return context;
 }
 
@@ -288,7 +289,6 @@ function renderUser(message, index, messages) {
 
 function renderAssistant(message, index, messages) {
   const running = message.status === "running";
-  const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
   // Open while working (thinking streams live), auto-collapse once the run
   // finishes, unless the user manually toggled it.
   const manual = state.openThinking[message.id];
@@ -298,9 +298,8 @@ function renderAssistant(message, index, messages) {
   return `<div class="assistant">
     <div class="run-header">
       <button class="thinking-toggle ${running ? "running" : ""} ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}" aria-expanded="${thinkingOpen}">
-        <span class="run-label">${running ? "Working" : `Worked for 0m ${worked}s`}</span>${caret}
+        <span class="run-label">${running ? "Working" : "Thinking"}</span>${caret}
       </button>
-      <span>${h(state.settings.mode)}</span>
     </div>
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
       ${(message.thinking || []).map((step, i) => renderThinkingStep(step, message.id, i, running)).join("")}
@@ -319,11 +318,16 @@ function renderThinkingStep(step, messageId, index, running) {
   if (step.kind === "tool" || (step.kind === "error" && step.title === "stderr")) {
     const code = (step.code || "").trim() || (step.kind === "error" ? (step.text || "").trim() : "");
     const result = (step.result || "").trim();
-    const dotClass = step.status === "success" ? "success" : step.status === "error" ? "error" : "";
+    // ACP reports status as "running"/"completed"/"failed" (and the CLI
+    // parser path uses "success"/"error"/"pending") — normalize so the dot
+    // turns green on success and red on failure.
+    const succeeded = step.status === "completed" || step.status === "success" || (step.done && !step.error && step.status !== "failed");
+    const failed = step.status === "failed" || step.status === "error" || step.error;
+    const dotClass = failed ? "error" : succeeded ? "success" : "";
     const summary = step.kind === "error" && step.title === "stderr" ? "Script output (stderr)" : (step.summary || step.title || "Tool call");
     // Converged action row: natural-language summary with the outcome badge
     // on the same line; the whole row toggles the command/result details.
-    const badge = step.done ? (step.status === "error" ? `<span class="step-badge error">✗</span>` : `<span class="step-badge">✓</span>`) : "";
+    const badge = step.done || failed ? (failed ? `<span class="step-badge error">✗</span>` : `<span class="step-badge">✓</span>`) : "";
     const hasDetail = Boolean(code || result || step.diff);
     return `<div class="timeline-item tool-item">
       <span class="timeline-dot ${dotClass}"></span>
@@ -435,9 +439,11 @@ function renderPermission() {
 
 function renderComposer(running) {
   const context = state.editorContext;
-  const muted = Boolean(context && state.mutedPaths[context.path]);
+  // Displayed context: even when muted we keep showing the document that
+  // WOULD be referenced (name follows document switches). When no document
+  // is open the slot stays empty — no "Editor context off" placeholder.
   const contextChip = context
-    ? `<button class="composer-chip ${muted ? "muted" : ""}" id="contextChip" type="button" title="${muted ? "Use context" : "Mute context"}" aria-label="${muted ? "Use context" : "Mute context"}">${muted ? icons.eyeOff : (context.type === "selection" ? icons.selection : icons.file)}<span>${h(context.name)}</span></button>`
+    ? `<button class="composer-chip ${state.contextMuted ? "muted" : ""}" id="contextChip" type="button" title="${state.contextMuted ? "Use context" : "Mute context"}" aria-label="${state.contextMuted ? "Use context" : "Mute context"}">${state.contextMuted ? icons.eyeOff : (context.type === "selection" ? icons.selection : icons.file)}<span>${h(context.name)}</span></button>`
     : "";
   return `<div class="composer-wrap">
     ${renderPermission()}
@@ -593,9 +599,7 @@ function bind() {
     render();
   });
   document.querySelector("#contextChip")?.addEventListener("click", () => {
-    const context = state.editorContext;
-    if (!context) return;
-    state.mutedPaths[context.path] = !state.mutedPaths[context.path];
+    state.contextMuted = !state.contextMuted;
     render();
   });
   document.querySelectorAll(".remove-pill").forEach(button => {
