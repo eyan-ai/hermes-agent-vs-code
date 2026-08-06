@@ -286,7 +286,7 @@ function renderAssistant(message, index, messages) {
       <span>${h(state.settings.mode)}</span>
     </div>
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
-      ${(message.thinking || []).map((step, i) => renderThinkingStep(step, message.id, i)).join("")}
+      ${(message.thinking || []).map((step, i) => renderThinkingStep(step, message.id, i, running)).join("")}
     </div>
     <div class="answer">${window.markdownToHtml ? window.markdownToHtml(message.text) : h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
@@ -295,7 +295,7 @@ function renderAssistant(message, index, messages) {
   </div>`;
 }
 
-function renderThinkingStep(step, messageId, index) {
+function renderThinkingStep(step, messageId, index, running) {
   const key = `${messageId}:${index}`;
   const manual = state.openSteps[key];
   const open = manual !== undefined ? manual : state.running;
@@ -317,23 +317,31 @@ function renderThinkingStep(step, messageId, index) {
           ${hasDetail ? `<span class="step-caret">▸</span>` : ""}
         </button>
         ${hasDetail ? `<div class="step-content ${open ? "" : "collapsed"}">
-          ${code ? `<pre class="code-sample"><code>${h(code)}</code></pre>` : ""}
-          ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
+          ${code ? `<div class="io-block"><span class="io-label">IN</span><pre class="code-sample"><code>${h(code)}</code></pre></div>` : ""}
+          ${result ? `<div class="io-block"><span class="io-label">OUT</span><pre class="code-sample"><code>${h(result)}</code></pre></div>` : ""}
         </div>` : ""}
       </div>
     </div>`;
   }
   const kind = step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
   const text = (step.text || "").trim();
-  // Converged thought: the "Thinking" title row itself toggles the content.
-  // While the agent is running it streams open; when the run ends it
-  // collapses unless the user expanded it manually.
+  // Converged thought: "Thought for 17s" title (duration when finished,
+  // "Thinking…" while streaming) — the title row itself toggles content.
+  // CLI-parser path has no per-step timestamps; once the run ends the
+  // message is no longer running, so every step reads as finished.
+  const finished = step.finalized || step.durationMs !== undefined || !running;
+  const duration = step.durationMs !== undefined
+    ? Math.max(1, Math.round(step.durationMs / 1000))
+    : 0;
+  const title = finished
+    ? (step.durationMs !== undefined ? `Thought for ${duration}s` : (step.title || "Thinking"))
+    : (step.title || "Thinking");
   const hasText = Boolean(text);
   return `<div class="timeline-item ${kind}-item">
     <span class="timeline-dot ${kind}"></span>
     <div class="timeline-body">
       <button class="step-row ${open ? "open" : ""}" data-step-key="${key}" type="button" aria-expanded="${open}">
-        <span class="step-summary">${h(step.title || "Thinking")}</span>
+        <span class="step-summary">${h(title)}</span>
         ${hasText ? `<span class="step-caret">▸</span>` : ""}
       </button>
       ${hasText ? `<div class="step-content ${open ? "" : "collapsed"}">

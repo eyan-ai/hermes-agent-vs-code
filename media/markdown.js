@@ -29,6 +29,7 @@
     let paragraph = [];
     let code = null;
     let list = null;
+    let table = null;
 
     const flushParagraph = () => {
       if (paragraph.length) {
@@ -42,9 +43,19 @@
       out.push(`<${tag}>${list.items.join("")}</${tag}>`);
       list = null;
     };
+    const flushTable = () => {
+      if (!table) return;
+      const rows = table.rows.map(row => `<tr>${row.map(cell => `<td>${inline(cell)}</td>`).join("")}</tr>`).join("");
+      out.push(`<table><thead><tr>${table.header.map(cell => `<th>${inline(cell)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`);
+      table = null;
+    };
+    const isTableRow = line => /^\s*\|.*\|\s*$/.test(line) && line.includes("|");
+    const splitRow = line => line.trim().replace(/^\||\|$/g, "").split("|").map(cell => cell.trim());
+    const isTableDivider = line => /^\s*\|?[\s:|-]+\|[\s:|-]+\|?$/.test(line) && line.includes("-");
     const flushAll = () => {
       flushParagraph();
       flushList();
+      flushTable();
       if (code !== null) {
         out.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
         code = null;
@@ -66,8 +77,27 @@
       if (/^\s*```/.test(line)) {
         flushParagraph();
         flushList();
+        flushTable();
         code = [];
         continue;
+      }
+
+      if (isTableDivider(line) && table) {
+        // The `|---|---|` separator between header and body.
+        continue;
+      }
+      if (isTableRow(line)) {
+        if (!table) {
+          flushParagraph();
+          flushList();
+          table = { header: splitRow(line), rows: [] };
+        } else {
+          table.rows.push(splitRow(line));
+        }
+        continue;
+      }
+      if (table) {
+        flushTable();
       }
 
       const heading = line.match(/^(#{1,6})\s+(.*)$/);
@@ -119,6 +149,7 @@
       if (/^\s*$/.test(line)) {
         flushParagraph();
         flushList();
+        flushTable();
         continue;
       }
 

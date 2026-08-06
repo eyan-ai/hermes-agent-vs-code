@@ -139,6 +139,9 @@ button { color: inherit; }
 .step-content { margin: 3px 0 2px; }
 .step-content.collapsed { display: none; }
 .step-content p { margin: 0; color: var(--muted); white-space: pre-wrap; font-size: 12px; line-height: 1.55; }
+.io-block { margin: 4px 0 2px; }
+.io-label { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .5px; color: var(--primary); border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); border-radius: 4px; padding: 0 5px; margin-bottom: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.io-block .code-sample { margin-top: 2px; }
 .code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid var(--border-soft); background: color-mix(in srgb, var(--panel) 88%, var(--text)); color: color-mix(in srgb, var(--text) 82%, var(--panel)); overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: normal; word-break: break-word; }
 .answer > :first-child { margin-top: 0; }
@@ -159,6 +162,10 @@ button { color: inherit; }
 .answer a:hover { text-decoration: underline; }
 .answer del { color: var(--muted); }
 .answer hr { border: 0; border-top: 1px solid var(--border-soft); margin: 14px 0; }
+.answer table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; line-height: 1.5; }
+.answer th, .answer td { border: 1px solid var(--border-soft); padding: 4px 8px; text-align: left; word-break: break-word; }
+.answer th { background: color-mix(in srgb, var(--text) 6%, transparent); font-weight: 620; }
+.answer tr:nth-child(even) td { background: color-mix(in srgb, var(--text) 2.5%, transparent); }
 .answer-actions { display: flex; justify-content: flex-end; gap: 3px; margin-top: 2px; }
 .answer-action { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; padding: 0; cursor: pointer; }
 .answer-action .icon { width: 13px; height: 13px; }
