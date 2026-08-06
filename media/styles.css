@@ -227,7 +227,7 @@ button { color: inherit; }
 .mini-btn { border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; font-weight: 400; }
 .mini-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .mode-label { font-weight: 400; }
-.composer { background: light-dark(var(--vscode-input-background, #fff), #2a2a2a); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
+.composer { background: light-dark(var(--vscode-input-background, #fff), #2a2a2a); border: 1px solid light-dark(rgba(0,0,0,.18), rgba(255,255,255,.22)); border-radius: 10px; box-shadow: none; overflow: hidden; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--primary) 78%, light-dark(#fff, #000)); }
 .composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid light-dark(rgba(0,0,0,.16), rgba(255,255,255,.18)); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .composer-top::-webkit-scrollbar { display: none; }
@@ -241,7 +241,7 @@ button { color: inherit; }
 .prompt-skill { color: var(--primary); font-size: 14px; line-height: 21px; font-weight: 400; white-space: nowrap; }
 .prompt { flex: 1; min-height: 20px; max-height: 78px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
 .composer:has(.composer-top.visible) .prompt { max-height: 65px; }
-.toolbar { min-height: 44px; border-top: 1px solid var(--border-soft); padding: 7px 8px; display: flex; align-items: center; gap: 7px; }
+.toolbar { min-height: 44px; border-top: 1px solid light-dark(rgba(0,0,0,.16), rgba(255,255,255,.18)); padding: 7px 8px; display: flex; align-items: center; gap: 7px; }
 .tool-btn { height: 30px; min-width: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
 .tool-btn:hover { background: var(--primary-soft); color: var(--primary); }
 #modeBtn .mode-label { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

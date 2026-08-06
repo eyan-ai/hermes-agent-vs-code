@@ -179,7 +179,12 @@ class HermesSidebarProvider {
     this.sessions.unshift(session);
     this.activeSessionId = session.id;
     await this.saveSessions();
-    // Surface the active document as default context immediately.
+    // Surface the active document as default context immediately. If the
+    // last-active editor is stale (extension activated after the file was
+    // opened), pick up the currently focused editor as a fallback.
+    if (!this.lastActiveEditor && vscode.window.activeTextEditor) {
+      this.lastActiveEditor = vscode.window.activeTextEditor;
+    }
     this.refreshEditorContext();
     this.postState();
     return session;
