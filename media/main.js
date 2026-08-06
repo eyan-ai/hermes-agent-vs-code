@@ -268,14 +268,25 @@ function findQuestionIndex(messages, assistantIndex) {
 }
 
 function renderThinkingStep(step) {
-  const kind = step.kind === "tool" ? "tool" : step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
+  if (step.kind === "tool") {
+    const args = (step.args || "").trim();
+    const result = (step.result || "").trim();
+    return `<div class="timeline-item tool-item">
+      <span class="timeline-dot tool"></span>
+      <div class="timeline-body">
+        <div class="timeline-title"><strong>${h(step.title)}</strong>${step.done ? `<span class="timeline-status">✓</span>` : ""}</div>
+        ${args ? `<pre class="code-sample"><code>${h(args)}</code></pre>` : ""}
+        ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
+      </div>
+    </div>`;
+  }
+  const kind = step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
   const text = step.text || "";
-  const trimmed = text.length > 400 ? `${text.slice(0, 400)}…` : text;
   return `<div class="timeline-item ${kind}-item">
     <span class="timeline-dot ${kind}"></span>
     <div class="timeline-body">
-      <div class="timeline-title"><strong>${h(step.title || (kind === "tool" ? "Tool" : "Thinking"))}</strong></div>
-      ${trimmed ? `<p>${h(trimmed)}</p>` : ""}
+      <div class="timeline-title"><strong>${h(step.title || "Thinking")}</strong></div>
+      ${text ? `<p>${h(text)}</p>` : ""}
     </div>
   </div>`;
 }
@@ -497,10 +508,12 @@ function bind() {
   document.querySelector("#modelSelect")?.addEventListener("change", event => {
     state.settings.model = event.target.value;
     settingsChanged();
+    render();
   });
   document.querySelector("#effortSelect")?.addEventListener("change", event => {
     state.settings.effort = event.target.value;
     settingsChanged();
+    render();
   });
   const prompt = document.querySelector("#prompt");
   prompt?.addEventListener("input", event => {

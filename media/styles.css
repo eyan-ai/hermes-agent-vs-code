@@ -123,7 +123,10 @@ button { color: inherit; }
 .timeline-body { min-width: 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
 .timeline-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; font-size: 12px; line-height: 18px; color: var(--muted); }
 .timeline-title strong { color: var(--text); font-weight: 600; }
+.timeline-status { color: #64c988; font-weight: 600; }
 .timeline-body p { margin: 0; color: var(--muted); white-space: pre-wrap; }
+.timeline-body .code-sample { margin: 6px 0 2px; }
+.code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid var(--border-soft); background: color-mix(in srgb, var(--panel) 88%, var(--text)); color: color-mix(in srgb, var(--text) 82%, var(--panel)); overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: normal; word-break: break-word; }
 .answer > :first-child { margin-top: 0; }
 .answer h1, .answer h2, .answer h3, .answer h4, .answer h5, .answer h6 { margin: 16px 0 6px; line-height: 1.35; font-weight: 650; }

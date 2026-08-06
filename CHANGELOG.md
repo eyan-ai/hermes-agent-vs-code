@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3
+
+- Thinking timeline now shows the real reasoning and execution: natural-language reasoning as text steps, tool calls as steps with their Args in a monospace code box, and tool results (`Result: ...`) in their own code box with a ✓ when completed. Tool-outcome lines no longer pollute the thinking text.
+- Model selection echoes immediately: the run-settings popover and the toolbar button now show the model/effort actually picked in the session (previously `postState` always fell back to defaults, so the selection never stuck).
+- Context follows the last active document instead of the focused one: clicking into the Agent input no longer loses the editor context, and with multiple editor groups the last-clicked document's group wins.
+- Editor-title button reuses an existing agent column (Hermes panels or any other plugin's webview, e.g. Claude Code) and adds a tab there; only creates a new column when no agent column exists.
+- Run-settings popover closes on outside click (existing behavior, kept).
+
 ## 0.2.2
 
 - Editor-title agent button opens a Hermes panel in a new editor group beside the current one (same window, side by side).

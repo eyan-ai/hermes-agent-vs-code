@@ -86,7 +86,12 @@ function activate(context) {
     vscode.commands.registerCommand("hermesAgent.focusInput", () => {
       provider.post({ type: "focusInput" });
     }),
-    vscode.window.onDidChangeActiveTextEditor(() => provider.refreshEditorContext()),
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      // Track the last active document across focus changes (the webview
+      // steals focus when typing, so activeTextEditor goes undefined there).
+      if (editor) provider.lastActiveEditor = editor;
+      provider.refreshEditorContext();
+    }),
     vscode.window.onDidChangeTextEditorSelection(() => provider.refreshEditorContext())
   );
 }
@@ -101,6 +106,7 @@ class HermesSidebarProvider {
     this.sessions = this.loadSessions();
     this.activeSessionId = this.sessions[0]?.id;
     this.runningProcess = undefined;
+    this.lastActiveEditor = vscode.window.activeTextEditor;
   }
 
   resolveWebviewView(view) {
@@ -157,13 +163,15 @@ class HermesSidebarProvider {
   }
 
   async openEditorSession() {
-    // The editor-title agent button opens a Hermes panel in a NEW editor
-    // group beside the current one — same window, two columns side by side.
+    // Reuse an existing agent column if there is one (ours or another
+    // plugin's webview) — add a tab there. Otherwise open a new column
+    // beside the current document.
     const session = await this.newSession();
+    const targetColumn = this.findAgentColumn();
     const panel = vscode.window.createWebviewPanel(
       "hermesAgent.editorSession",
       session.title || "Hermes Agent",
-      vscode.ViewColumn.Beside,
+      targetColumn,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -180,6 +188,20 @@ class HermesSidebarProvider {
       this.panels.delete(panel);
     });
     this.refreshEditorContext();
+  }
+
+  findAgentColumn() {
+    // Our own panels first, then any group already hosting a webview
+    // (Claude Code and other agent plugins live there too).
+    for (const panel of this.panels) {
+      if (panel.viewColumn !== undefined) return panel.viewColumn;
+    }
+    for (const group of vscode.window.tabGroups.all) {
+      if (group.tabs.some(tab => tab.input instanceof vscode.TabInputWebview)) {
+        return group.viewColumn;
+      }
+    }
+    return vscode.ViewColumn.Beside;
   }
 
   async onMessage(message) {
@@ -444,7 +466,18 @@ class HermesSidebarProvider {
           pushThinking();
         },
         onTool: tool => {
-          assistantMessage.thinking.push({ kind: "tool", title: tool.name, text: tool.args || "Invoked tool." });
+          assistantMessage.thinking.push({ kind: "tool", title: tool.name, args: tool.args || "", result: tool.result || "", done: tool.done });
+          pushThinking();
+        },
+        onToolUpdate: tool => {
+          const steps = assistantMessage.thinking;
+          for (let index = steps.length - 1; index >= 0; index -= 1) {
+            if (steps[index].kind === "tool" && steps[index].title === tool.name) {
+              steps[index].result = tool.result || "";
+              steps[index].done = tool.done;
+              break;
+            }
+          }
           pushThinking();
         },
         onAnswerLine: line => {
@@ -498,28 +531,55 @@ class HermesSidebarProvider {
   }
 
   refreshEditorContext() {
-    this.post({ type: "editorContext", context: getEditorContext() });
+    this.post({ type: "editorContext", context: this.getEditorContext() });
   }
 
   postState() {
     const config = vscode.workspace.getConfiguration("hermesAgent");
     const command = config.get("command", "");
-    const model = config.get("model", "");
     const models = hermesModels();
+    // Echo what the user actually picked in the session first; fall back to
+    // VS Code settings / hermes config / first catalog model.
+    const sessionSettings = this.activeSession().settings || {};
+    const model = sessionSettings.model || config.get("model", "") || hermesConfig().model || models[0] || "5.5";
     this.post({
       type: "state",
       activeSessionId: this.activeSessionId,
       sessions: this.sessions,
       settings: {
-        mode: config.get("defaultMode", "Auto"),
-        model: model || hermesConfig().model || (models[0] || "5.5"),
-        effort: config.get("effort", "Medium"),
-        skills: config.get("skills", [])
+        mode: sessionSettings.mode || config.get("defaultMode", "Auto"),
+        model,
+        effort: sessionSettings.effort || config.get("effort", "Medium"),
+        skills: sessionSettings.skills && sessionSettings.skills.length ? sessionSettings.skills : config.get("skills", [])
       },
       models,
-      diagnostics: buildDiagnostics(command, model || hermesConfig().model, models),
-      editorContext: getEditorContext()
+      diagnostics: buildDiagnostics(command, model, models),
+      editorContext: this.getEditorContext()
     });
+  }
+
+  getEditorContext() {
+    // Use the last active document, not the focused one: the webview takes
+    // focus while typing, and activeTextEditor goes undefined there.
+    const editor = this.lastActiveEditor;
+    if (!editor) return null;
+    const doc = editor.document;
+    const selection = editor.selection;
+    if (!selection.isEmpty) {
+      return {
+        type: "selection",
+        name: `Selected lines ${selection.start.line + 1}-${selection.end.line + 1}`,
+        path: vscode.workspace.asRelativePath(doc.uri, false),
+        uri: doc.uri.toString(),
+        text: doc.getText(selection)
+      };
+    }
+    return {
+      type: "file",
+      name: path.basename(doc.uri.fsPath || doc.fileName),
+      path: vscode.workspace.asRelativePath(doc.uri, false),
+      uri: doc.uri.toString()
+    };
   }
 
   html(webview) {
@@ -546,27 +606,6 @@ class HermesSidebarProvider {
   }
 }
 
-function getEditorContext() {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) return null;
-  const doc = editor.document;
-  const selection = editor.selection;
-  if (!selection.isEmpty) {
-    return {
-      type: "selection",
-      name: `Selected lines ${selection.start.line + 1}-${selection.end.line + 1}`,
-      path: vscode.workspace.asRelativePath(doc.uri, false),
-      uri: doc.uri.toString(),
-      text: doc.getText(selection)
-    };
-  }
-  return {
-    type: "file",
-    name: path.basename(doc.uri.fsPath || doc.fileName),
-    path: vscode.workspace.asRelativePath(doc.uri, false),
-    uri: doc.uri.toString()
-  };
-}
 
 function toAttachment(uri, type) {
   const relative = vscode.workspace.asRelativePath(uri, false);

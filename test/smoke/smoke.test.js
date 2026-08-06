@@ -66,10 +66,12 @@ exports.run = async function () {
     const { createChatParser } = require(path.join(__dirname, "..", "..", "lib", "chat-parser.js"));
     const thinking = [];
     const tools = [];
+    const updates = [];
     const answer = [];
     const parser = createChatParser({
       onThinkingEnd: t => thinking.push(t),
       onTool: t => tools.push(t),
+      onToolUpdate: t => updates.push(t),
       onAnswerLine: l => answer.push(l)
     });
     parser.onChunk(`💬 Starting conversation: 'read the file'\r
@@ -85,7 +87,9 @@ The user asks to read the file. Let me do it.\r
      }\r
 \r
 ┌─ Reasoning ──────────────────────────┐\r
-✅ Tool 1 completed.\r
+✅ Tool 1 completed in 0.12s\r
+Result: {"content": "1|hello", "total_lines": 1}\r
+The file was read successfully.\r
 └──────────────────────────────────────┘\r
 \r
 ╭─ ⚕ Hermes ───────────────────────────╮\r
@@ -94,12 +98,20 @@ The user asks to read the file. Let me do it.\r
 Session:        20260806_114600_test\r
 `);
     parser.flush();
-    const okThinking = thinking.length === 2 && thinking[0].includes("user asks");
-    const okTool = tools.length === 1 && tools[0].name === "read_file" && tools[0].args.includes('"path"');
+    const okThinking = thinking.length === 2
+      && thinking[0].includes("user asks")
+      && !thinking[0].includes("Tool 1")
+      && !thinking[1].includes("Result:")
+      && thinking[1].includes("file was read");
+    const okTool = tools.length === 1 && tools[0].name === "read_file"
+      && tools[0].args.includes('"path"')
+      && tools[0].result.includes("hello")
+      && tools[0].done === true;
+    const okUpdate = updates.some(u => u.done === true && u.result.includes("hello"));
     const okAnswer = answer.join("\n").includes("hello") && !answer.join("\n").includes("Session:");
-    if (okThinking && okTool && okAnswer) ok("chat parser: reasoning + tool + answer blocks");
-    else fail("chat parser: reasoning + tool + answer blocks", JSON.stringify({ thinking, tools, answer }).slice(0, 300));
-  } catch (e) { fail("chat parser: reasoning + tool + answer blocks", e); }
+    if (okThinking && okTool && okUpdate && okAnswer) ok("chat parser: reasoning + tool(args/result) + answer blocks");
+    else fail("chat parser: reasoning + tool(args/result) + answer blocks", JSON.stringify({ thinking, tools, updates, answer }).slice(0, 400));
+  } catch (e) { fail("chat parser: reasoning + tool(args/result) + answer blocks", e); }
 
   // 9. Chat output parser: plain --oneshot fallback streams into the answer
   try {

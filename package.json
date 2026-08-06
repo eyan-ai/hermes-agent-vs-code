@@ -2,7 +2,7 @@
   "name": "hermes-agent",
   "displayName": "Hermes Agent",
   "description": "Hermes Agent chat sidebar for VS Code with editor-aware context, workspace file references, skills, sessions, and approval modes.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "hermes-agent",
   "license": "MIT",
   "repository": {
