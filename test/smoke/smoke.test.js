@@ -71,7 +71,12 @@ exports.run = async function () {
     const parser = createChatParser({
       onThinkingEnd: t => thinking.push(t),
       onTool: t => tools.push(t),
-      onToolUpdate: t => updates.push(t),
+      // Mirror the extension host: updates merge back into the emitted step.
+      onToolUpdate: t => {
+        updates.push(t);
+        const i = tools.findIndex(x => x.name === t.name);
+        if (i >= 0) tools[i] = { ...tools[i], ...t };
+      },
       onAnswerLine: l => answer.push(l)
     });
     parser.onChunk(`💬 Starting conversation: 'read the file'\r
@@ -119,7 +124,15 @@ Session:        20260806_114600_test\r
   try {
     const { createChatParser } = require(path.join(__dirname, "..", "..", "lib", "chat-parser.js"));
     const tools = [];
-    const parser = createChatParser({ onThinkingEnd: () => {}, onTool: t => tools.push(t), onToolUpdate: () => {}, onAnswerLine: () => {} });
+    const parser = createChatParser({
+      onThinkingEnd: () => {},
+      onTool: t => tools.push(t),
+      onToolUpdate: t => {
+        const i = tools.findIndex(x => x.name === t.name);
+        if (i >= 0) tools[i] = { ...tools[i], ...t };
+      },
+      onAnswerLine: () => {}
+    });
     parser.onChunk(`📞 Tool 1: terminal(['cmd'])\r
      Args: {\r
        "command": "ls -la"\r

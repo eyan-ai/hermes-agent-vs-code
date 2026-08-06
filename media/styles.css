@@ -64,7 +64,7 @@ button { color: inherit; }
 .memory-row code { border-radius: 6px; background: color-mix(in srgb, var(--text) 8%, transparent); color: #b00000; padding: 2px 6px; font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .conversation { min-height: 0; flex: 1; display: flex; flex-direction: column; position: relative; }
-.scroll { flex: 1; overflow: auto; padding: 12px 21px 150px; }
+.scroll { flex: 1; overflow: auto; padding: 12px 21px 110px; }
 .diagnostics { display: grid; gap: 7px; margin-bottom: 12px; }
 .diagnostic { border: 1px solid color-mix(in srgb, #d9822b 44%, var(--border)); border-radius: 8px; background: color-mix(in srgb, #d9822b 12%, var(--panel)); color: var(--muted); padding: 9px 10px; display: grid; gap: 3px; }
 .diagnostic strong { color: var(--text); font-weight: 560; }
@@ -127,15 +127,17 @@ button { color: inherit; }
 .timeline-status { color: #64c988; font-weight: 600; }
 .timeline-body p { margin: 0; color: var(--muted); white-space: pre-wrap; }
 .timeline-body .code-sample { margin: 6px 0 2px; }
-.step-detail { margin: 4px 0 2px; }
-.step-detail summary { cursor: pointer; font-size: 11px; color: var(--primary); user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 4px; }
-.step-detail summary::-webkit-details-marker { display: none; }
-.step-detail summary::before { content: "▸"; font-size: 10px; transition: transform .12s; }
-.step-detail[open] summary::before { transform: rotate(90deg); }
-.step-detail summary:hover { text-decoration: underline; }
-.step-snippet { margin: 0 !important; color: var(--muted) !important; }
-.step-status { color: #64c988; font-weight: 600; font-size: 11px; }
-.step-status:has(> .error) { color: #e0645f; }
+.step-row { width: 100%; border: 0; background: transparent; padding: 2px 0; display: flex; align-items: center; gap: 7px; text-align: left; cursor: pointer; color: var(--text); border-radius: 4px; font: inherit; }
+.step-row:hover { color: var(--primary); }
+.step-row:hover .step-summary { text-decoration: underline; }
+.step-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; font-weight: 500; }
+.step-badge { color: #64c988; font-weight: 700; font-size: 12px; flex: 0 0 auto; }
+.step-badge.error { color: #e0645f; }
+.step-caret { color: var(--muted); font-size: 10px; flex: 0 0 auto; transition: transform .12s; margin-left: auto; }
+.step-row.open .step-caret { transform: rotate(90deg); }
+.step-content { margin: 3px 0 2px; }
+.step-content.collapsed { display: none; }
+.step-content p { margin: 0; color: var(--muted); white-space: pre-wrap; font-size: 12px; line-height: 1.55; }
 .code-sample { margin: 0; padding: 10px; border-radius: 7px; border: 1px solid var(--border-soft); background: color-mix(in srgb, var(--panel) 88%, var(--text)); color: color-mix(in srgb, var(--text) 82%, var(--panel)); overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 .answer { border-top: 1px solid var(--border-soft); padding-top: 10px; line-height: 1.55; white-space: normal; word-break: break-word; }
 .answer > :first-child { margin-top: 0; }
@@ -164,7 +166,10 @@ button { color: inherit; }
 .answer-action.copied:hover { background: transparent; color: #64c988; }
 
 .composer-wrap { position: absolute; left: 21px; right: 21px; bottom: 14px; z-index: 20; }
-.popover { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); display: none; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 9px; box-shadow: var(--shadow); overflow: hidden; }
+/* Fade mask: content scrolling under the composer softens out instead of
+   colliding with the input — the reply never visually spills past it. */
+.composer-wrap::before { content: ""; position: absolute; left: -21px; right: -21px; bottom: 100%; height: 48px; background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
+.popover { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); display: none; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 9px; box-shadow: var(--shadow); overflow: hidden; z-index: 5; }
 .popover.open { display: block; }
 #modePopover { left: auto; right: 0; width: 300px; }
 .popover-head { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-weight: 620; }
@@ -200,10 +205,10 @@ button { color: inherit; }
 .remove-pill { position: absolute; right: 0; top: 0; bottom: 0; width: 34px; border: 0; border-radius: 0 6px 6px 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--panel) 94%, transparent) 34%); color: inherit; display: none; place-items: center; cursor: pointer; padding: 0; font-size: 14px; }
 .attachment-pill:hover .remove-pill { display: grid; }
 .remove-pill:hover { color: var(--text); }
-.input-line { min-height: 70px; padding: 13px 12px 8px; display: flex; gap: 8px; align-items: flex-start; }
+.input-line { min-height: 47px; padding: 9px 12px 6px; display: flex; gap: 8px; align-items: flex-start; }
 .prompt-skill { color: var(--primary); font-size: 14px; line-height: 21px; font-weight: 400; white-space: nowrap; }
-.prompt { flex: 1; min-height: 46px; max-height: 234px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
-.composer:has(.composer-top.visible) .prompt { max-height: 195px; }
+.prompt { flex: 1; min-height: 31px; max-height: 156px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 13px; line-height: 1.5; }
+.composer:has(.composer-top.visible) .prompt { max-height: 130px; }
 .toolbar { min-height: 44px; border-top: 1px solid var(--border-soft); padding: 7px 8px; display: flex; align-items: center; gap: 7px; }
 .tool-btn { height: 30px; min-width: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
 .tool-btn:hover { background: var(--primary-soft); color: var(--primary); }

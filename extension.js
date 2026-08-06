@@ -500,11 +500,11 @@ class HermesSidebarProvider {
         if (assistantMessage.status === "failed") return;
         assistantMessage.status = code === 0 ? "done" : "failed";
         assistantMessage.finishedAt = Date.now();
-        assistantMessage.thinking.push({
-          kind: code === 0 ? "success" : "error",
-          title: code === 0 ? "Done" : "Failed",
-          text: `Process exited with code ${code}.`
-        });
+        if (code !== 0) {
+          // A clean exit needs no celebratory step — success is already
+          // visible via the ✓ badges on each tool row.
+          assistantMessage.thinking.push({ kind: "error", title: "Failed", text: `Process exited with code ${code}.` });
+        }
         this.runningProcess = undefined;
         this.saveSessions().then(() => this.postState()).then(resolve);
       });

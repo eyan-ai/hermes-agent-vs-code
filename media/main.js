@@ -22,6 +22,7 @@ const state = {
   historyQuery: "",
   noticeDismissed: false,
   openThinking: {},
+  openSteps: {},
   models: [],
   mutedPaths: {},
   copiedIndex: undefined,
@@ -271,10 +272,10 @@ function renderUser(message, index, messages) {
 function renderAssistant(message, index, messages) {
   const running = message.status === "running";
   const worked = message.startedAt && message.finishedAt ? Math.max(1, Math.round((message.finishedAt - message.startedAt) / 1000)) : 0;
-  // Open while working (no answer yet), auto-collapse once the answer
-  // starts streaming, unless the user manually toggled it.
+  // Open while working (thinking streams live), auto-collapse once the run
+  // finishes, unless the user manually toggled it.
   const manual = state.openThinking[message.id];
-  const thinkingOpen = manual !== undefined ? manual : (running && !message.text);
+  const thinkingOpen = manual !== undefined ? manual : running;
   const caret = icons.chevron.replace("<svg", '<svg class="thinking-caret"').replace('d="m6 4 4 4-4 4"', 'd="m4 6 4 4 4-4"');
   const copied = state.copiedIndex === index;
   return `<div class="assistant">
@@ -285,7 +286,7 @@ function renderAssistant(message, index, messages) {
       <span>${h(state.settings.mode)}</span>
     </div>
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
-      ${(message.thinking || []).map(step => renderThinkingStep(step)).join("")}
+      ${(message.thinking || []).map((step, i) => renderThinkingStep(step, message.id, i)).join("")}
     </div>
     <div class="answer">${window.markdownToHtml ? window.markdownToHtml(message.text) : h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
@@ -294,52 +295,50 @@ function renderAssistant(message, index, messages) {
   </div>`;
 }
 
-function renderThinkingStep(step) {
-  if (step.kind === "tool") {
-    const code = (step.code || "").trim();
+function renderThinkingStep(step, messageId, index) {
+  const key = `${messageId}:${index}`;
+  const manual = state.openSteps[key];
+  const open = manual !== undefined ? manual : state.running;
+  if (step.kind === "tool" || (step.kind === "error" && step.title === "stderr")) {
+    const code = (step.code || "").trim() || (step.kind === "error" ? (step.text || "").trim() : "");
     const result = (step.result || "").trim();
     const dotClass = step.status === "success" ? "success" : step.status === "error" ? "error" : "";
-    const summary = step.summary || step.title || "Tool call";
-    // Converged action row: natural-language summary in the header, raw
-    // command/result tucked behind a native <details> expander so the
-    // working view stays a timeline of actions, not a log dump.
-    const detail =
-      code || result
-        ? `<details class="step-detail">
-            <summary>${step.done ? (step.status === "error" ? "✗ Failed" : "✓ Done") : "… Working"}</summary>
-            ${code ? `<pre class="code-sample"><code>${h(code)}</code></pre>` : ""}
-            ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
-          </details>`
-        : step.done
-          ? `<span class="step-status">${step.status === "error" ? "✗" : "✓"}</span>`
-          : "";
+    const summary = step.kind === "error" && step.title === "stderr" ? "Script output (stderr)" : (step.summary || step.title || "Tool call");
+    // Converged action row: natural-language summary with the outcome badge
+    // on the same line; the whole row toggles the command/result details.
+    const badge = step.done ? (step.status === "error" ? `<span class="step-badge error">✗</span>` : `<span class="step-badge">✓</span>`) : "";
+    const hasDetail = Boolean(code || result);
     return `<div class="timeline-item tool-item">
       <span class="timeline-dot ${dotClass}"></span>
       <div class="timeline-body">
-        <div class="timeline-title">${h(summary)}</div>
-        ${detail}
+        <button class="step-row ${open ? "open" : ""}" data-step-key="${key}" type="button" aria-expanded="${open}">
+          <span class="step-summary">${h(summary)}</span>
+          ${badge}
+          ${hasDetail ? `<span class="step-caret">▸</span>` : ""}
+        </button>
+        ${hasDetail ? `<div class="step-content ${open ? "" : "collapsed"}">
+          ${code ? `<pre class="code-sample"><code>${h(code)}</code></pre>` : ""}
+          ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
+        </div>` : ""}
       </div>
     </div>`;
   }
   const kind = step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
   const text = (step.text || "").trim();
-  // Converged thought: title + leading snippet, full text behind an
-  // expander. Long reasoning dumps collapse to a readable headline.
-  const detail =
-    text.length > 160
-      ? `<details class="step-detail">
-          <summary>Show full ${h(step.title || "thinking")}</summary>
-          <p>${h(text)}</p>
-        </details>
-        <p class="step-snippet">${h(text.slice(0, 160))}…</p>`
-      : text
-        ? `<p>${h(text)}</p>`
-        : "";
+  // Converged thought: the "Thinking" title row itself toggles the content.
+  // While the agent is running it streams open; when the run ends it
+  // collapses unless the user expanded it manually.
+  const hasText = Boolean(text);
   return `<div class="timeline-item ${kind}-item">
     <span class="timeline-dot ${kind}"></span>
     <div class="timeline-body">
-      <div class="timeline-title">${h(step.title || "Thinking")}</div>
-      ${detail}
+      <button class="step-row ${open ? "open" : ""}" data-step-key="${key}" type="button" aria-expanded="${open}">
+        <span class="step-summary">${h(step.title || "Thinking")}</span>
+        ${hasText ? `<span class="step-caret">▸</span>` : ""}
+      </button>
+      ${hasText ? `<div class="step-content ${open ? "" : "collapsed"}">
+        <p>${h(text)}</p>
+      </div>` : ""}
     </div>
   </div>`;
 }
@@ -435,6 +434,13 @@ function bind() {
     button.addEventListener("click", () => {
       const id = button.dataset.mid;
       state.openThinking[id] = !state.openThinking[id];
+      render();
+    });
+  });
+  document.querySelectorAll(".step-row").forEach(button => {
+    button.addEventListener("click", () => {
+      const key = button.dataset.stepKey;
+      state.openSteps[key] = !(state.openSteps[key] ?? state.running);
       render();
     });
   });
