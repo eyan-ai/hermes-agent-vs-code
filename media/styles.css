@@ -86,7 +86,7 @@ button { color: inherit; }
 .notice-body { padding: 12px; color: var(--muted); line-height: 1.5; }
 .thread { display: grid; gap: 10px; }
 .message.user { display: flex; justify-content: flex-end; position: sticky; top: 0; z-index: 4; padding: 6px 0 10px; margin: -6px 0 2px; isolation: isolate; }
-.message.user::before { content: ""; position: absolute; left: -21px; right: -21px; top: -12px; bottom: 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, var(--bg) 0%, var(--bg) 82%, transparent 100%); opacity: .9; }
+.message.user::before { content: ""; position: absolute; left: -21px; right: -21px; top: -12px; bottom: 0; z-index: -1; pointer-events: none; background: var(--bg); }
 .bubble { width: fit-content; max-width: 100%; position: relative; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--primary) 38%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--text); line-height: 1.5; }
 .bubble.text-only { display: flex; align-items: center; min-height: 36px; }
 .question-frame { max-width: 100%; max-height: 76px; overflow: hidden; }
@@ -131,6 +131,7 @@ button { color: inherit; }
 .timeline-title strong { color: var(--text); font-weight: 600; }
 .timeline-status { color: #64c988; font-weight: 600; }
 .timeline-body p { margin: 0; color: var(--muted); white-space: pre-wrap; }
+.note-item .note-text { font-size: 12px; line-height: 1.55; color: var(--muted); }
 .timeline-body .code-sample { margin: 6px 0 2px; }
 .step-row { width: 100%; border: 0; background: transparent; padding: 2px 0; display: flex; align-items: center; gap: 0; text-align: left; cursor: default; color: var(--text); border-radius: 4px; font: inherit; }
 .step-summary { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; font-weight: 500; color: var(--muted); transition: color .12s; }
@@ -228,7 +229,7 @@ button { color: inherit; }
 .mode-label { font-weight: 400; }
 .composer { background: light-dark(var(--vscode-input-background, #fff), #2a2a2a); border: 1px solid var(--border); border-radius: 10px; box-shadow: none; overflow: hidden; }
 .composer:focus-within { border-color: color-mix(in srgb, var(--primary) 78%, light-dark(#fff, #000)); }
-.composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.composer-top { display: none; gap: 6px; flex-wrap: nowrap; min-height: 38px; padding: 6px 8px; border-bottom: 1px solid light-dark(rgba(0,0,0,.16), rgba(255,255,255,.18)); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .composer-top::-webkit-scrollbar { display: none; }
 .composer-top.visible { display: flex; }
 .attachment-pill { position: relative; display: inline-flex; align-items: center; gap: 3px; width: fit-content; max-width: 128px; min-height: 26px; padding: 3px 7px; border: 1px solid var(--border-soft); border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; line-height: 16px; font-weight: 400; white-space: nowrap; overflow: hidden; flex: 0 0 auto; }

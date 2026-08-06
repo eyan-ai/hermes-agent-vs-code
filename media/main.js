@@ -347,6 +347,15 @@ function renderThinkingStep(step, messageId, index, running) {
   }
   const kind = step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
   const text = (step.text || "").trim();
+  // Process narrative ("我先读代码…") renders as a plain interleaved line,
+  // like competitor UIs: a muted dot, no fold, no IN/OUT — it reads as
+  // agent commentary between tool calls, not a structured step.
+  if (step.kind === "note" && text) {
+    return `<div class="timeline-item note-item">
+      <span class="timeline-dot neutral"></span>
+      <div class="timeline-body"><p class="note-text">${h(text)}</p></div>
+    </div>`;
+  }
   // Converged thought: "Thought for 17s" title (duration when finished,
   // "Thinking…" while streaming) — the title row itself toggles content.
   // CLI-parser path has no per-step timestamps; once the run ends the
