@@ -449,7 +449,8 @@ class HermesSidebarProvider {
       };
       const parser = createChatParser({
         onThinkingEnd: text => {
-          assistantMessage.thinking.push({ kind: "thinking", title: "Thinking", text });
+          // Converge reasoning to a readable head; the frontend expands it.
+          assistantMessage.thinking.push({ kind: "thinking", title: "Thinking", text: text.slice(0, 2000) });
           pushThinking();
         },
         onTool: tool => {
@@ -477,7 +478,14 @@ class HermesSidebarProvider {
       child.stdout.on("end", () => parser.flush());
       child.stderr.on("data", data => {
         const chunk = data.toString();
-        assistantMessage.thinking.push({ kind: "error", title: "stderr", text: chunk.trim() });
+        // Converge stderr into a single error step instead of one row per
+        // line — a verbose CLI shouldn't flood the working timeline.
+        const existing = [...assistantMessage.thinking].reverse().find(step => step.kind === "error" && step.title === "stderr");
+        if (existing) {
+          existing.text = `${existing.text}${existing.text ? "\n" : ""}${chunk.trim()}`.slice(-4000);
+        } else {
+          assistantMessage.thinking.push({ kind: "error", title: "stderr", text: chunk.trim().slice(0, 2000) });
+        }
         pushThinking();
       });
       child.on("error", error => {

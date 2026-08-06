@@ -101,11 +101,13 @@ function render() {
   const messages = session.messages || [];
   const running = messages.some(message => message.role === "assistant" && message.status === "running");
   state.running = running;
-  // Preserve scroll: remember whether we were pinned to the bottom (live
-  // streaming follows new output) and the exact scrollTop otherwise, so
-  // re-renders (copy feedback, popovers, chunks) never yank the viewport.
+  // Scroll policy: while an agent is running we pin to the bottom so new
+  // output is always visible. If the user scrolls up away from the bottom
+  // we back off (see the scroll listener); when they return to the bottom
+  // or a new run starts, we follow again.
   const scrollEl = document.querySelector(".scroll");
-  const nearBottom = scrollEl ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 96 : true;
+  if (!state.userScrolledUp) state.pinBottom = true;
+  if (!running) state.pinBottom = false;
   const prevScrollTop = scrollEl ? scrollEl.scrollTop : 0;
   document.querySelector("#app").innerHTML = `
     <div class="app">
@@ -134,14 +136,33 @@ function render() {
   bind();
   autosizePrompt();
   updateQuestionOverflow();
-  // Restore scroll after the DOM rebuild: pinned to bottom while streaming
-  // (auto-follow latest output), exact position preserved otherwise.
+  // Restore scroll after the DOM rebuild: pin to the bottom while the agent
+  // is streaming (auto-follow latest output), exact position otherwise.
   requestAnimationFrame(() => {
     const el = document.querySelector(".scroll");
     if (!el) return;
-    el.scrollTop = nearBottom ? el.scrollHeight : prevScrollTop;
+    el.scrollTop = state.pinBottom ? el.scrollHeight : prevScrollTop;
   });
 }
+
+// User scrolling away from the bottom releases the auto-follow; scrolling
+// back to the bottom re-engages it for the next chunk.
+let scrollHandlerBound = false;
+function bindScrollWatch() {
+  if (scrollHandlerBound) return;
+  scrollHandlerBound = true;
+  document.addEventListener("scroll", event => {
+    const el = event.target;
+    if (!el || !el.classList || !el.classList.contains("scroll")) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+    if (!atBottom) state.userScrolledUp = true;
+    else if (state.running) {
+      state.userScrolledUp = false;
+      state.pinBottom = true;
+    }
+  }, true);
+}
+bindScrollWatch();
 
 function renderDiagnostics() {
   const diagnostics = state.diagnostics || [];
@@ -278,22 +299,47 @@ function renderThinkingStep(step) {
     const code = (step.code || "").trim();
     const result = (step.result || "").trim();
     const dotClass = step.status === "success" ? "success" : step.status === "error" ? "error" : "";
+    const summary = step.summary || step.title || "Tool call";
+    // Converged action row: natural-language summary in the header, raw
+    // command/result tucked behind a native <details> expander so the
+    // working view stays a timeline of actions, not a log dump.
+    const detail =
+      code || result
+        ? `<details class="step-detail">
+            <summary>${step.done ? (step.status === "error" ? "✗ Failed" : "✓ Done") : "… Working"}</summary>
+            ${code ? `<pre class="code-sample"><code>${h(code)}</code></pre>` : ""}
+            ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
+          </details>`
+        : step.done
+          ? `<span class="step-status">${step.status === "error" ? "✗" : "✓"}</span>`
+          : "";
     return `<div class="timeline-item tool-item">
       <span class="timeline-dot ${dotClass}"></span>
       <div class="timeline-body">
-        <div class="timeline-title"><strong>${h(step.summary || step.title)}</strong>${step.done ? `<span class="timeline-status">${step.status === "error" ? "✗" : "✓"}</span>` : ""}</div>
-        ${code ? `<pre class="code-sample"><code>${h(code)}</code></pre>` : ""}
-        ${result ? `<pre class="code-sample"><code>${h(result)}</code></pre>` : ""}
+        <div class="timeline-title">${h(summary)}</div>
+        ${detail}
       </div>
     </div>`;
   }
   const kind = step.kind === "success" ? "success" : step.kind === "error" ? "error" : "neutral";
-  const text = step.text || "";
+  const text = (step.text || "").trim();
+  // Converged thought: title + leading snippet, full text behind an
+  // expander. Long reasoning dumps collapse to a readable headline.
+  const detail =
+    text.length > 160
+      ? `<details class="step-detail">
+          <summary>Show full ${h(step.title || "thinking")}</summary>
+          <p>${h(text)}</p>
+        </details>
+        <p class="step-snippet">${h(text.slice(0, 160))}…</p>`
+      : text
+        ? `<p>${h(text)}</p>`
+        : "";
   return `<div class="timeline-item ${kind}-item">
     <span class="timeline-dot ${kind}"></span>
     <div class="timeline-body">
-      <div class="timeline-title"><strong>${h(step.title || "Thinking")}</strong></div>
-      ${text ? `<p>${h(text)}</p>` : ""}
+      <div class="timeline-title">${h(step.title || "Thinking")}</div>
+      ${detail}
     </div>
   </div>`;
 }
@@ -609,6 +655,8 @@ function submit() {
   state.skill = "";
   state.draft = "";
   state.modifyingIndex = null;
+  state.userScrolledUp = false;
+  state.pinBottom = true;
   render();
 }
 
