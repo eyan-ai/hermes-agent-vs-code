@@ -711,25 +711,24 @@ function bind() {
   });
 }
 
-// Persistent outside-click handling: closes popovers, commits title edits.
-// Bound once at module level so it survives re-renders (unlike a per-render
-// { once: true } listener, which stopped working after its first fire).
-// Global event delegation for the send/stop button — avoids lost clicks
-// when the DOM re-renders between mousedown and click. The button in the
-// DOM is always fresh because this fires on the document, not the element.
+// Unified global click handler: survives DOM re-renders so stop/send never
+// loses its click binding. Also handles popover dismiss and title editing.
 document.addEventListener("click", event => {
-  const btn = event.target.closest("#sendBtn");
-  if (!btn) return;
-  event.preventDefault();
-  event.stopPropagation();
-  if (state.running) {
-    vscode.postMessage({ type: "stop" });
-  } else {
-    submit();
+  // Send / stop button — must be first so stopPropagation prevents the
+  // popover-dismiss logic from firing, which would otherwise re-render and
+  // drop the mousedown→click sequence mid-air.
+  const sendBtn = event.target.closest("#sendBtn");
+  if (sendBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.running) {
+      vscode.postMessage({ type: "stop" });
+    } else {
+      submit();
+    }
+    return;
   }
-});
 
-document.addEventListener("click", event => {
   const link = event.target.closest("a[data-href]");
   if (link) {
     event.preventDefault();
