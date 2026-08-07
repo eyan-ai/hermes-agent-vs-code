@@ -172,7 +172,7 @@ button { color: inherit; }
 .answer th, .answer td { border: 1px solid var(--border-soft); padding: 4px 8px; text-align: left; word-break: break-word; }
 .answer th { background: color-mix(in srgb, var(--text) 6%, transparent); font-weight: 620; }
 .answer tr:nth-child(even) td { background: color-mix(in srgb, var(--text) 2.5%, transparent); }
-.answer-actions { display: flex; justify-content: flex-end; gap: 3px; margin-top: 2px; }
+.answer-actions { display: flex; justify-content: flex-end; gap: 3px; margin-top: 2px; padding-bottom: 8px; position: relative; z-index: 5; }
 .answer-action { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; padding: 0; cursor: pointer; }
 .answer-action .icon { width: 13px; height: 13px; }
 .answer-action:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }

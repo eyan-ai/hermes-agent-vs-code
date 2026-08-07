@@ -518,7 +518,7 @@ class HermesSidebarProvider {
     const client = await this.ensureAcp(command);
     let acpSessionId = this.acpSessions.get(session.id);
     if (!acpSessionId) {
-      const created = await client.request("session/new", { cwd: this.workspaceCwd(), mcpServers: [] });
+      const created = await client.request("session/new", { cwd: this.workspaceCwd(), mcpServers: [], skip_memory: true });
       acpSessionId = created.sessionId;
       this.acpSessions.set(session.id, acpSessionId);
       // Persist the mapping so reopening this session later can re-sync

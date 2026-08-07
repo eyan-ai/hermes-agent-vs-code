@@ -116,6 +116,7 @@ function updateSend() {
 }
 
 function render() {
+  state._now = Date.now();
   const session = activeSession();
   const messages = session.messages || [];
   const running = messages.some(message => message.role === "assistant" && message.status === "running");
@@ -287,6 +288,12 @@ function renderUser(message, index, messages) {
   </div>`;
 }
 
+function runningDuration(startedAt) {
+  const seconds = Math.max(0, Math.round(((state._now || Date.now()) - (startedAt || Date.now())) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 function renderAssistant(message, index, messages) {
   const running = message.status === "running";
   // Open while working (thinking streams live), auto-collapse once the
@@ -297,14 +304,15 @@ function renderAssistant(message, index, messages) {
   const thinkingOpen = manual !== undefined ? manual : (running && !answerStarted);
   const caret = icons.chevron.replace("<svg", '<svg class="thinking-caret"').replace('d="m6 4 4 4-4 4"', 'd="m4 6 4 4 4-4"');
   const copied = state.copiedIndex === index;
+  const label = running ? `Working for ${runningDuration(message.startedAt)}` : "Thinking";
   return `<div class="assistant">
     <div class="run-header">
       <button class="thinking-toggle ${running ? "running" : ""} ${thinkingOpen ? "open" : ""}" type="button" data-mid="${message.id}" aria-expanded="${thinkingOpen}">
-        <span class="run-label">${running ? "Working" : "Thinking"}</span>${caret}
+        <span class="run-label">${label}</span>${caret}
       </button>
     </div>
     <div class="thinking ${thinkingOpen ? "" : "collapsed"}">
-      ${(message.thinking || []).map((step, i) => renderThinkingStep(step, message.id, i, running)).join("")}
+      ${(message.thinking || []).map((step, i) => renderThinkingStep(step, message.id, i, message.thinking, running)).join("")}
     </div>
     <div class="answer">${window.markdownToHtml ? window.markdownToHtml(message.text) : h(message.text)}</div>
     ${message.text ? `<div class="answer-actions">
@@ -313,10 +321,16 @@ function renderAssistant(message, index, messages) {
   </div>`;
 }
 
-function renderThinkingStep(step, messageId, index, running) {
+function renderThinkingStep(step, messageId, index, thinking, running) {
   const key = `${messageId}:${index}`;
   const manual = state.openSteps[key];
-  const open = manual !== undefined ? manual : state.running;
+  // Cascade folding: while running, only the last step is expanded —
+  // completed steps auto-collapse (unless the user manually toggled).
+  // When the run stops, all steps default to collapsed.
+  const lastIndex = thinking.length - 1;
+  const lastStep = thinking[lastIndex];
+  const lastIsRunning = lastStep && (lastStep.kind === "tool" || lastStep.kind === "thinking") && !lastStep.done && !lastStep.finalized;
+  const open = manual !== undefined ? manual : (running && (index === lastIndex || (lastIsRunning && index >= lastIndex - 1 && thinking[lastIndex-1]?.kind === "tool" && !thinking[lastIndex-1]?.done)));
   if (step.kind === "tool" || (step.kind === "error" && step.title === "stderr")) {
     const code = (step.code || "").trim() || (step.kind === "error" ? (step.text || "").trim() : "");
     const result = (step.result || "").trim();
@@ -367,7 +381,7 @@ function renderThinkingStep(step, messageId, index, running) {
     ? Math.max(1, Math.round(step.durationMs / 1000))
     : 0;
   const title = finished
-    ? (step.durationMs !== undefined ? `Thought for ${duration}s` : (step.title || "Thinking"))
+    ? (step.durationMs !== undefined ? `Thinking ${duration}s` : (step.title || "Thinking"))
     : (step.title || "Thinking");
   const hasText = Boolean(text);
   return `<div class="timeline-item ${kind}-item">
@@ -631,6 +645,8 @@ function bind() {
   document.querySelectorAll(".skill-option").forEach(button => {
     button.addEventListener("click", () => {
       state.skill = button.dataset.skill;
+      // Strip the leading "/" the user typed to trigger the skill popup.
+      state.draft = state.draft.replace(/^\s*\/\s*/, "").trimStart();
       state.skillOpen = false;
       render();
     });
@@ -679,7 +695,8 @@ function bind() {
       submit();
     }
   });
-  document.querySelector("#sendBtn")?.addEventListener("click", submit);
+  // Send/stop button is handled by a global delegated click listener that
+  // survives DOM re-renders — no per-render binding needed.
   document.querySelector("#permissionAllow")?.addEventListener("click", () => {
     const requestId = state.permission?.requestId;
     state.permission = null;
@@ -697,6 +714,21 @@ function bind() {
 // Persistent outside-click handling: closes popovers, commits title edits.
 // Bound once at module level so it survives re-renders (unlike a per-render
 // { once: true } listener, which stopped working after its first fire).
+// Global event delegation for the send/stop button — avoids lost clicks
+// when the DOM re-renders between mousedown and click. The button in the
+// DOM is always fresh because this fires on the document, not the element.
+document.addEventListener("click", event => {
+  const btn = event.target.closest("#sendBtn");
+  if (!btn) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (state.running) {
+    vscode.postMessage({ type: "stop" });
+  } else {
+    submit();
+  }
+});
+
 document.addEventListener("click", event => {
   const link = event.target.closest("a[data-href]");
   if (link) {
