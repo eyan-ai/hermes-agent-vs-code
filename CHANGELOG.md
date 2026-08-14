@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.51
+
+- README screenshots now reference absolute raw.githubusercontent.com URLs so they render on the Visual Studio Marketplace overview page instead of 404ing.
+
 ## 0.2.50
 
 - Action status dots are static while retaining accent, success, and failure colors; existing Working animations remain unchanged.

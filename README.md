@@ -8,23 +8,23 @@ Bring [Hermes Agent](https://github.com/NousResearch/hermes-agent) into the edit
 
 Hermes works beside your code instead of in a detached chat window. The current file or selection can travel with the prompt, while workspace search and local attachments make it easy to add the exact context a task needs.
 
-![Hermes Agent working beside an open source file in VS Code](docs/images/hermes-editor-workspace.jpeg)
+![Hermes Agent working beside an open source file in VS Code](https://raw.githubusercontent.com/eyan-ai/hermes-agent-vs-code/main/docs/images/hermes-editor-workspace.jpeg)
 
 ### Transparent and controllable execution
 
 Follow long-running work through structured Thinking and Action records rather than an opaque stream of text. Review sensitive edits before they are applied, stop an active turn when the direction is wrong, and use Queue or Steer to control what happens next without losing the conversation.
 
-![Structured actions and queued follow-up messages in Hermes Agent](docs/images/hermes-actions-and-queue.jpeg)
+![Structured actions and queued follow-up messages in Hermes Agent](https://raw.githubusercontent.com/eyan-ai/hermes-agent-vs-code/main/docs/images/hermes-actions-and-queue.jpeg)
 
 ### A persistent agent workspace
 
 Sessions preserve the flow of a project, while editable personality, memory, and reusable skills let Hermes carry stable working preferences across tasks. Model and approval-mode controls stay close to the composer so each run can match the level of autonomy you want.
 
-![Hermes Agent personality, memory, attachments, and skill controls](docs/images/hermes-memory-and-skills.jpeg)
+![Hermes Agent personality, memory, attachments, and skill controls](https://raw.githubusercontent.com/eyan-ai/hermes-agent-vs-code/main/docs/images/hermes-memory-and-skills.jpeg)
 
 Start a clean session directly from the editor whenever a task needs a fresh context, then continue with the same editor-aware composer and workspace tools.
 
-![Quick new-session entry point and editor-aware composer](docs/images/hermes-quick-new-session.jpeg)
+![Quick new-session entry point and editor-aware composer](https://raw.githubusercontent.com/eyan-ai/hermes-agent-vs-code/main/docs/images/hermes-quick-new-session.jpeg)
 
 ## Feature overview
 

@@ -2,7 +2,7 @@
   "name": "hermes-agent-vscode",
   "displayName": "Hermes Agent",
   "description": "An unofficial community VS Code extension for Hermes Agent — chat sidebar with editor-aware context, workspace file references, skills, sessions, and approval modes. Not affiliated with Nous Research.",
-  "version": "0.2.50",
+  "version": "0.2.51",
   "publisher": "EyanLin",
   "license": "MIT",
   "repository": {
