@@ -1,63 +1,61 @@
 # Hermes Agent for VS Code
 
-Hermes Agent is a VS Code sidebar chat extension prototype packaged as a publishable extension. It provides a Codex/Claude-Code-like conversation UI, editor-aware context, workspace file references, slash skills, session history, and run settings.
+Bring [Hermes Agent](https://github.com/NousResearch/hermes-agent) into the editor where the work already lives. Hermes Agent for VS Code combines editor-aware context, visible agent execution, reusable skills, persistent memory, and session controls in one focused workspace.
 
-## Features
+## Why Hermes Agent for VS Code
 
-- Sidebar chat view in the Activity Bar.
-- Current editor file or selection is automatically available as context unless muted.
-- `@` workspace search for files and folders.
-- `+` local file/folder picker.
-- `/` skill picker from `hermesAgent.skills`.
-- Enter to send, Shift+Enter for a new line.
-- Session history with rename and delete.
-- Session title rename from the top bar.
-- Run settings for approval mode, model, and effort.
-- Streaming assistant output.
-- Optional Hermes CLI integration through `hermesAgent.command`.
+### Editor-native context
+
+Hermes works beside your code instead of in a detached chat window. The current file or selection can travel with the prompt, while workspace search and local attachments make it easy to add the exact context a task needs.
+
+![Hermes Agent working beside an open source file in VS Code](docs/images/hermes-editor-workspace.jpeg)
+
+### Transparent and controllable execution
+
+Follow long-running work through structured Thinking and Action records rather than an opaque stream of text. Review sensitive edits before they are applied, stop an active turn when the direction is wrong, and use Queue or Steer to control what happens next without losing the conversation.
+
+![Structured actions and queued follow-up messages in Hermes Agent](docs/images/hermes-actions-and-queue.jpeg)
+
+### A persistent agent workspace
+
+Sessions preserve the flow of a project, while editable personality, memory, and reusable skills let Hermes carry stable working preferences across tasks. Model and approval-mode controls stay close to the composer so each run can match the level of autonomy you want.
+
+![Hermes Agent personality, memory, attachments, and skill controls](docs/images/hermes-memory-and-skills.jpeg)
+
+Start a clean session directly from the editor whenever a task needs a fresh context, then continue with the same editor-aware composer and workspace tools.
+
+![Quick new-session entry point and editor-aware composer](docs/images/hermes-quick-new-session.jpeg)
+
+## Feature overview
+
+- ACP-powered streaming conversation UI in the VS Code Activity Bar.
+- Structured Thinking and Action timeline with expandable details.
+- Current file and selection context, with an explicit mute control.
+- `@` workspace search and `+` local file or folder attachments.
+- Clickable local document references and external links.
+- Slash commands, reusable skills, Queue, and Steer workflows.
+- Approval, Diff, and document-review flows for sensitive changes.
+- Immediate Stop controls with isolated turn cancellation.
+- Session history with rename, delete, and quick new-session actions.
+- Persistent personality and memory documents.
+- Run settings for approval mode and model selection.
+- Enter to send and Shift+Enter for a new line.
 
 ## Hermes CLI Integration
 
-By default, the extension uses a local mock streaming response so the UI can be installed and tested immediately.
-
-To connect a real Hermes Agent runtime, configure:
+By default, the extension calls the local Hermes CLI:
 
 ```json
 {
   "hermesAgent.command": "hermes",
-  "hermesAgent.commandArgs": ["agent", "run"]
+  "hermesAgent.commandArgs": ["--oneshot", "{{prompt}}"]
 }
 ```
 
-The extension sends a JSON payload to stdin:
+The extension composes the user prompt, selected skill, attachments, and current editor context into one text prompt, then replaces `{{prompt}}` in `hermesAgent.commandArgs`.
 
-```json
-{
-  "prompt": "user prompt",
-  "skill": "optional skill",
-  "attachments": [],
-  "editorContext": {}
-}
-```
+Anything written to stdout is appended into the assistant message. If `hermesAgent.command` is empty, the extension falls back to a local preview response.
 
-Anything written to stdout is streamed into the assistant message.
+## Community project notice
 
-## Development
-
-```bash
-npm install
-npm run lint
-npm run package
-```
-
-Press `F5` in VS Code to launch an Extension Development Host.
-
-## Publishing
-
-1. Update `publisher`, `repository`, and version in `package.json`.
-2. Run `npm run package`.
-3. Publish the generated `.vsix` with `vsce publish`.
-
-## Notes
-
-This implementation is independent of Claude Code. The Claude Code extension directory was only used as a structural reference for VS Code packaging concepts.
+Hermes Agent for VS Code is an independent, unofficial community extension. It is not affiliated with, endorsed by, or connected to Nous Research. The Hermes Agent name and the Nous girl logo (`nous-girl.png`) are property of Nous Research and are used here only to identify compatibility with Hermes Agent.

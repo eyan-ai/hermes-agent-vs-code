@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="../../media/styles.css">
+  <style>:root { --vscode-focusBorder: #7c3aed; }</style>
+  <title>Hermes Webview Harness</title>
+</head>
+<body data-icon="../../resources/nous-girl.png">
+  <div id="app"></div>
+  <script>
+    window.__messages = [];
+    window.acquireVsCodeApi = () => ({ postMessage: message => window.__messages.push(message) });
+    window.markdownToHtml = value => String(value || "");
+  </script>
+  <script src="../../media/main.js"></script>
+  <script>
+    const queue = Array.from({ length: 7 }, (_, index) => ({
+      id: `queue-${index + 1}`,
+      prompt: `Queued message ${index + 1}: verify the responsive queue layout and preserve its position`,
+      command: index === 1 ? "/status" : "",
+      skill: index === 2 ? "Code Review" : "",
+      attachments: []
+    }));
+    window.__statePayload = {
+      type: "state",
+      activeSessionId: "session-1",
+      sessions: [{
+        id: "session-1",
+        title: "Inline commands and queue",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [
+          { id: "user-stopped", role: "user", text: "Stop this task", createdAt: Date.now() - 24000 },
+          { id: "assistant-stopped", role: "assistant", text: "Partial response before cancellation.", status: "stopped", startedAt: Date.now() - 23000, finishedAt: Date.now() - 18000, thinking: [] },
+          { id: "user-long", role: "user", command: "/status", text: "Review the complete implementation status before continuing.\nConfirm the queue behavior after repeated streaming updates.\nConfirm that long user messages remain readable at the minimum editor width.\nConfirm that expansion stays open while the Agent continues working.\nConfirm that the explicit bottom-right control collapses the message.\nConfirm that command colors and Todo activity use the composer accent.", createdAt: Date.now() - 17000 },
+          { id: "assistant-long", role: "assistant", text: "The checks are queued for verification.", status: "completed", startedAt: Date.now() - 16000, finishedAt: Date.now() - 15000, thinking: [] },
+          { id: "user-1", role: "user", text: "Implement the approved interaction", attachments: [
+            { name: "architecture-overview.md", path: "/workspace/architecture-overview.md", uri: "file:///workspace/architecture-overview.md", type: "file" },
+            { name: "interaction-specification.md", path: "/workspace/interaction-specification.md", uri: "file:///workspace/interaction-specification.md", type: "file" },
+            { name: "responsive-validation.md", path: "/workspace/responsive-validation.md", uri: "file:///workspace/responsive-validation.md", type: "file" },
+            { name: "release-checklist.md", path: "/workspace/release-checklist.md", uri: "file:///workspace/release-checklist.md", type: "file" }
+          ], createdAt: Date.now() },
+          { id: "assistant-1", role: "assistant", text: "", status: "running", startedAt: Date.now() - 12000, thinking: [
+            { kind: "thinking", title: "Thinking", text: "Inspecting the queue and slash command behavior.", finalized: false }
+          ], plan: [
+            { content: "Preserve Interrupted", status: "completed" },
+            { content: "Keep prompt DOM stable", status: "in_progress" },
+            { content: "Verify Todo and Queue", status: "pending" }
+          ] }
+        ]
+      }],
+      queue,
+      settings: {
+        mode: "Manual",
+        skills: [{ name: "Code Review", description: "Review code and behavior" }],
+        commands: [
+          { name: "Session", commands: [
+            { name: "/new", value: "/new", type: "command", description: "Start a new session" },
+            { name: "/steer", value: "/steer", type: "command", description: "Guide the active task without interrupting it" }
+          ] },
+          { name: "Installed Skills", commands: [
+            { name: "/Code Review", value: "Code Review", type: "skill", description: "Review code and behavior" }
+          ] }
+        ]
+      },
+      diagnostics: [],
+      editorContext: { type: "file", name: "extension.js", path: "extension.js", uri: "file:///workspace/extension.js" },
+      permission: null
+    };
+    window.__dispatchState = () => window.dispatchEvent(new MessageEvent("message", { data: window.__statePayload }));
+    window.__dispatchState();
+  </script>
+</body>
+</html>

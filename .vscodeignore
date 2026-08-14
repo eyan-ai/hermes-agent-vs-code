@@ -1,4 +1,5 @@
 .vscode/**
+.superpowers/**
 .gitignore
 node_modules/**
 *.vsix

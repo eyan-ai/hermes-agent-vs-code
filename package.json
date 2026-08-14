@@ -1,10 +1,14 @@
 {
-  "name": "hermes-agent",
+  "name": "hermes-agent-vscode",
   "displayName": "Hermes Agent",
-  "description": "Hermes Agent chat sidebar for VS Code with editor-aware context, workspace file references, skills, sessions, and approval modes.",
-  "version": "0.1.0",
-  "publisher": "hermes-agent",
+  "description": "An unofficial community VS Code extension for Hermes Agent — chat sidebar with editor-aware context, workspace file references, skills, sessions, and approval modes. Not affiliated with Nous Research.",
+  "version": "0.2.50",
+  "publisher": "EyanLin",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eyan-ai/hermes-agent-vs-code"
+  },
   "engines": {
     "vscode": "^1.94.0"
   },
@@ -74,18 +78,35 @@
       "properties": {
         "hermesAgent.command": {
           "type": "string",
-          "default": "",
+          "default": "hermes",
           "scope": "machine",
-          "description": "Optional Hermes Agent CLI command. When empty, the extension uses a local mock streaming response."
+          "description": "Hermes Agent CLI command. When empty, the extension uses a local mock streaming response."
         },
         "hermesAgent.commandArgs": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "default": [],
+          "default": [
+            "chat",
+            "-q",
+            "{{prompt}}",
+            "-v"
+          ],
           "scope": "machine",
-          "description": "Arguments passed to hermesAgent.command. The prompt is sent through stdin."
+          "description": "Arguments passed to hermesAgent.command (CLI fallback mode only). Use {{prompt}} where the composed prompt should be inserted. Default uses `hermes chat -q -v` so reasoning steps and tool calls stream into the sidebar; plain `--oneshot` output still works as a fallback."
+        },
+        "hermesAgent.useAcp": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Use the ACP protocol (`hermes acp`) for structured streaming of thinking blocks, tool calls, and answers. When false, falls back to parsing `hermes chat -q -v` output. ACP requires the hermes-agent[acp] extra installed."
+        },
+        "hermesAgent.permissionReminderMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "description": "Minutes between reminders while Hermes waits for confirmation. Set to 0 to disable reminders; reminders never answer the request."
         },
         "hermesAgent.defaultMode": {
           "type": "string",
@@ -98,7 +119,7 @@
         },
         "hermesAgent.model": {
           "type": "string",
-          "default": "5.5",
+          "default": "deepseek-v4-flash",
           "description": "Default model label displayed in the run settings."
         },
         "hermesAgent.effort": {
@@ -170,11 +191,14 @@
     ]
   },
   "scripts": {
-    "lint": "node --check extension.js",
-    "package": "vsce package --no-dependencies",
+    "lint": "node --check extension.js && node --check lib/acp-client.js && node --check lib/acp-render.js && node --check lib/acp-session-handoff.js && node --check lib/command-catalog.js && node --check lib/diff-preview.js && node --check lib/document-review.js && node --check lib/generated-document.js && node --check lib/model-settings.js && node --check lib/prompt-queue.js && node --check lib/session-cancellation-barrier.js && node --check lib/turn-lifecycle.js && node --check media/main.js && node --check test/acp-client.test.js && node --check test/acp-render.test.js && node --check test/acp-session-handoff.test.js && node --check test/command-catalog.test.js && node --check test/diff-preview.test.js && node --check test/document-review.test.js && node --check test/extension-contract.test.js && node --check test/generated-document.test.js && node --check test/markdown.test.js && node --check test/model-settings.test.js && node --check test/prompt-queue.test.js && node --check test/session-cancellation-barrier.test.js && node --check test/turn-lifecycle.test.js && node --check test/webview-contract.test.js && node --check test/webview-visual-check.js",
+    "test:unit": "node test/acp-client.test.js && node test/acp-render.test.js && node test/acp-session-handoff.test.js && node test/command-catalog.test.js && node test/diff-preview.test.js && node test/document-review.test.js && node test/extension-contract.test.js && node test/generated-document.test.js && node test/markdown.test.js && node test/model-settings.test.js && node test/prompt-queue.test.js && node test/session-cancellation-barrier.test.js && node test/turn-lifecycle.test.js && node test/webview-contract.test.js",
+    "test": "npm run test:unit && node test/smoke/run-smoke.js",
+    "package": "vsce package --no-dependencies --no-rewrite-relative-links",
     "prepublishOnly": "npm run lint"
   },
   "devDependencies": {
+    "@vscode/test-electron": "^2.4.1",
     "@vscode/vsce": "^3.2.2"
   }
 }
