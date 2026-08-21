@@ -24,24 +24,68 @@ test("ACP turns become cancellable before transport initialization", () => {
   assert.ok(runAcp.lastIndexOf("if (lifecycle.cancelled)", promptIndex) > runAcp.indexOf('client.request("session/set_mode"'));
 });
 
+test("standard ACP keeps title edits local to the plugin", () => {
+  assert.match(extension, /require\("\.\/lib\/session-title"\)/);
+  assert.match(extension, /titleOrigin: inferTitleOrigin\(session\)/);
+
+  const renameStart = extension.indexOf("async renameSession(");
+  const renameEnd = extension.indexOf("\n  modelStateForSession(", renameStart);
+  const rename = extension.slice(renameStart, renameEnd);
+  assert.match(rename, /applyManualTitle\(session, nextTitle\)/);
+
+  const updateStart = extension.indexOf('if \(update\.sessionUpdate === "session_info_update"\)');
+  const updateEnd = extension.indexOf("this.expirePermissionFromSessionUpdate", updateStart);
+  const update = extension.slice(updateStart, updateEnd);
+  assert.doesNotMatch(update, /session\.title = title/);
+  assert.match(update, /Scheme 3 keeps titles local/);
+});
+
+test("standard ACP sessions use local automatic titles from user text", () => {
+  const start = extension.indexOf("const titleSource =", extension.indexOf("async startPrompt("));
+  const end = extension.indexOf("session.updatedAt", start);
+  const titleBlock = extension.slice(start, end);
+  assert.match(titleBlock, /const titleSource = prompt\.trim\(\)/);
+  assert.match(titleBlock, /if \(session\.title === "Untitled" && titleSource\)/);
+  assert.doesNotMatch(titleBlock, /message\.attachments|editorContext|Context:/);
+});
+
+test("standard ACP is the only server session contract", () => {
+  assert.match(extension, /require\("\.\/lib\/hermes-sessions"\)/);
+  assert.match(extension, /client\.request\("session\/list"/);
+  assert.match(extension, /mergeHermesSessions\(this\.sessions, remoteSessions/);
+  assert.doesNotMatch(extension, /_hermes\/session\/(?:snapshot|set_title|delete)/);
+  assert.doesNotMatch(extension, /execFile\("sqlite3"/);
+  const refreshStart = extension.indexOf("async refreshHermesSessions(");
+  assert.ok(refreshStart >= 0);
+  assert.match(extension, /case "deleteSession"/);
+  assert.match(extension, /Scheme 3 keeps titles local/);
+  assert.match(extension, /Put the user's words first/);
+});
+
+test("ACP prompts send attachments as resource blocks outside title text", () => {
+  assert.match(extension, /const promptBlocks = buildHermesPromptBlocks\(prompt, userMessage\)/);
+  assert.match(extension, /prompt: promptBlocks/);
+});
+
 test("Diff acceptance checks the recorded source state before rollback", () => {
   const start = extension.indexOf("async resolveDiffPermission(");
   const resolve = extension.slice(start, extension.indexOf("\n  disposeDocDiffUi()", start));
   assert.ok(resolve.indexOf("await this.diffSourceMatches(preview)") < resolve.indexOf("rollbackDocDiffPreview"));
   assert.ok(resolve.indexOf("await this._diffPreviewPromise") < resolve.indexOf("pending?.diff && !this._diffPreview"));
-  assert.match(resolve, /if \(!await this\.diffSourceMatches\(preview\)\)/);
+  assert.match(resolve, /sourceMatches = await this\.diffSourceMatches\(preview\)/);
+  assert.match(resolve, /if \(!sourceMatches\)/);
 });
 
-test("open-document Diff uses a reversible inline edit and repairs any autosaved preview", () => {
+test("every document Diff uses a read-only virtual tab without touching the source", () => {
   const start = extension.indexOf("async showDocDiff(");
   const end = extension.indexOf("\n  async resolveDiffPermission", start);
   const lifecycle = extension.slice(start, end);
-  assert.match(lifecycle, /async openInlineDiffPreview\(/);
-  assert.match(lifecycle, /editor\.edit\(builder =>/);
-  assert.match(lifecycle, /preview\.diskTextBefore = await this\.readFileTextIfExists\(uri\)/);
-  assert.match(lifecycle, /locatePreviewForRemoval\(document\.getText\(\), preview\)/);
-  assert.match(lifecycle, /vscode\.workspace\.applyEdit\(edit\)/);
-  assert.match(lifecycle, /diskText === preview\.previewText[\s\S]*document\.save\(\)/);
+  assert.match(lifecycle, /async openIsolatedDiffPreview\(/);
+  assert.match(lifecycle, /buildInlineDiffDocument\(preview, preview\.sourceText\)/);
+  assert.match(lifecycle, /scheme: "hermes-diff-preview"/);
+  assert.match(lifecycle, /this\.diffPreviewDocuments\.set\(preview\.previewUri, preview\.virtualText\)/);
+  assert.doesNotMatch(lifecycle, /editor\.edit\(builder =>|vscode\.workspace\.applyEdit\(|document\.save\(\)/);
+  assert.doesNotMatch(lifecycle, /inlineApplied|diskTextBefore|wasDirtyBefore|tightInsertions|locatePreviewForRemoval/);
   assert.doesNotMatch(lifecycle, /workspace\.fs\.writeFile/);
 });
 
@@ -52,9 +96,25 @@ test("Diff preview supports open, unopened, and missing target states without wr
   assert.match(extension, /if \(oldText\) return undefined/);
   assert.match(extension, /async diffSourceMatches\(/);
   assert.match(extension, /await this\.diffSourceMatches\(preview\)/);
+  assert.match(extension, /registerTextDocumentContentProvider\("hermes-diff-preview"/);
+  assert.doesNotMatch(extension, /registerTextDocumentContentProvider\("hermes-new-file-preview"/);
   const start = extension.indexOf("async showDocDiff(");
   const end = extension.indexOf("\n  async rollbackDocDiffPreview", start);
   assert.doesNotMatch(extension.slice(start, end), /workspace\.fs\.writeFile/);
+});
+
+test("Diff approval revalidates editor and disk content without treating a save as a conflict", () => {
+  const start = extension.indexOf("async diffSourceMatches(");
+  const end = extension.indexOf("\n  async showDocDiff(", start);
+  const matches = extension.slice(start, end);
+  assert.match(matches, /documentText: document\?\.getText\(\)/);
+  assert.match(matches, /vscode\.workspace\.fs\.readFile\(uri\)/);
+  assert.match(matches, /sourceSnapshotMatches\(preview/);
+  assert.doesNotMatch(matches, /document\.version/);
+});
+
+test("the temporary Diff tab never replaces the user's editor context", () => {
+  assert.match(extension, /editor\.document\.uri\.scheme !== "hermes-diff-preview"/);
 });
 
 test("Diff approval choices live only in the confirmation popup", () => {
@@ -77,7 +137,8 @@ test("editor Diff decorations follow VS Code theme colors", () => {
   assert.match(extension, /new vscode\.ThemeColor\("diffEditor\.insertedTextBackground"\)/);
   assert.match(extension, /new vscode\.ThemeColor\("editorOverviewRuler\.deletedForeground"\)/);
   assert.match(extension, /new vscode\.ThemeColor\("editorOverviewRuler\.addedForeground"\)/);
-  assert.match(extension, /changedLineIndices\(preview\.oldText, preview\.newText\)/);
+  assert.match(extension, /preview\.deletedRanges/);
+  assert.match(extension, /preview\.addedRanges/);
   assert.match(extension, /isWholeLine:\s*true/);
   assert.match(extension, /light: \{ backgroundColor: "rgba\(/);
   assert.match(extension, /dark: \{ backgroundColor: "rgba\(/);
@@ -165,8 +226,9 @@ test("active steer retargets the renderer and sends a raw ACP control command", 
 test("selected slash commands bypass the ordinary prompt wrapper", () => {
   const start = extension.indexOf("function composeHermesPrompt(");
   const compose = extension.slice(start, extension.indexOf("\nfunction id()", start));
-  assert.match(compose, /if \(userMessage\.command\)/);
-  assert.match(compose, /return `\$\{userMessage\.command\}/);
+  assert.match(compose, /Put the user's words first/);
+  assert.match(compose, /parts\.push\(`User request/);
+  assert.match(compose, /parts\.push\(`Command/);
 });
 
 test("system commands dispatch before ordinary prompt queue resolution", () => {
@@ -324,13 +386,33 @@ test("extension deactivation waits for provider cleanup", () => {
 });
 
 test("model settings use ACP session state and persist only successful selections", () => {
-  assert.match(extension, /const \{[^}]*configuredModelState[^}]*normalizeModelState[^}]*resolveSelectedModel[^}]*\} = require\("\.\/lib\/model-settings"\)/s);
+  assert.match(extension, /const \{[^}]*configuredModelState[^}]*mergeRefreshedModels[^}]*normalizeModelState[^}]*rememberReasoningEffort[^}]*resolveSelectedModel[^}]*\} = require\("\.\/lib\/model-settings"\)/s);
   assert.match(extension, /const created = await client\.request\("session\/new"/);
-  assert.match(extension, /applyAcpSessionState\(session, acpSessionId, models\)[\s\S]{0,180}normalizeModelState\(models\)/);
+  assert.match(extension, /applyAcpSessionState\(session, acpSessionId, models, configOptions\)[\s\S]{0,180}normalizeModelState\(models\)/);
   assert.match(extension, /client\.request\("session\/set_model", \{[\s\S]{0,120}sessionId:[\s\S]{0,120}modelId:/);
   assert.match(extension, /saveLastModel\(this\.context, selectedModel\)/);
   assert.match(extension, /session\.settings = \{[\s\S]{0,100}mode: lastMode\(this\.context\),[\s\S]{0,100}model: lastModel\(this\.context/);
   assert.match(extension, /models:\s*modelState\.options/);
+  assert.match(extension, /case "refreshModels"/);
+  assert.match(extension, /session\.modelRefreshStatus === "refreshing"/);
+  assert.match(extension, /_hermesConfig = null;[\s\S]{0,80}_hermesModelState = null/);
+  assert.match(extension, /mergeRefreshedModels\(previous, refreshed, selected\)/);
+  assert.match(extension, /option\?\.id === "reasoning_effort"/);
+  assert.match(extension, /client\.request\("session\/set_config_option", \{[\s\S]{0,140}configId: "reasoning_effort"/);
+  assert.doesNotMatch(extension, /this\.acp\.request\("session\/resume"[\s\S]{0,220}Unable to switch Hermes model/);
+  assert.match(extension, /update\.sessionUpdate === "config_option_update"/);
+  assert.match(extension, /applyAcpSessionState\(session, acpSessionId, undefined, configOptions\)/);
+  assert.match(extension, /rememberedEffort && session\.reasoningEffortSupported/);
+  assert.match(extension, /forked\.configOptions/);
+});
+
+test("webview loads the model picker helper before the main interaction script", () => {
+  assert.match(extension, /const modelPickerUri = webview\.asWebviewUri\([^\n]*"media", "model-picker\.js"/);
+  const helperScript = extension.indexOf('src="${modelPickerUri}"');
+  const mainScript = extension.indexOf('src="${scriptUri}"');
+  assert.ok(helperScript >= 0);
+  assert.ok(helperScript < mainScript);
+  assert.doesNotMatch(extension, /script-src[^\n]*(?:unsafe-inline|unsafe-eval)/);
 });
 
 test("custom confirmation feedback stays on the related action and continues without Queue", () => {
@@ -379,40 +461,72 @@ test("one permission request aggregates every Diff block for the same document",
   assert.match(extension, /showDocDiff\(pending\.diffs\?\.length \? pending\.diffs : pending\.diff/);
 });
 
-test("document approvals prefer an inline Diff for open documents before size-based Review", () => {
+test("V4A compatibility stays isolated to the original-document preview", () => {
+  assert.match(extension, /projectV4aUpdatePreview/);
+  assert.match(extension, /buildInlineDiffDocument/);
+  assert.match(extension, /const previewProjection = projectV4aUpdatePreview\(toolCall\)/);
+  assert.match(extension, /\n\s*previewProjection,\n/);
+  assert.match(extension, /pending\?\.previewProjection\?\.kind === "ready"/);
+  assert.match(extension, /const previewDiffs = pending\?\.previewProjection\?\.kind === "ready"[\s\S]{0,160}pending\.previewProjection\.diff/);
+  assert.match(extension, /pending\?\.previewProjection\?\.kind !== "ready"/);
+  assert.doesNotMatch(extension, /pending\.diff\s*=\s*pending\?\.previewProjection\.diff/);
+  assert.match(extension, /buildInlineDiffDocument\(preview, preview\.sourceText\)/);
+  assert.match(extension, /preview\.deletedRanges = projection\.deletedRanges/);
+  assert.match(extension, /preview\.addedRanges = projection\.addedRanges/);
+});
+
+test("invalid V4A projections fail closed before Permission queueing for every target state", () => {
+  const handlerStart = extension.indexOf("onPermissionRequest: request =>");
+  const handlerEnd = extension.indexOf("\n        }", handlerStart);
+  const handler = extension.slice(handlerStart, handlerEnd);
+  assert.match(handler, /previewProjection\.kind === "invalid"/);
+  assert.doesNotMatch(handler, /openDocumentGroup/);
+  assert.match(handler, /outcome: \{ outcome: "cancelled" \}/);
+  assert.ok(handler.indexOf('outcome: { outcome: "cancelled" }') < handler.indexOf("this.permissionQueue.push(pending)"));
+});
+
+test("a changed source converts approval into one non-hard-denial Agent feedback", () => {
+  assert.match(extension, /pending\.previewDiverged = true/);
+  assert.match(extension, /feedbackText = SOURCE_DIVERGENCE_FEEDBACK/);
+  assert.match(extension, /normalizedDecision = "feedback"/);
+  assert.match(extension, /accept = false/);
+  assert.match(extension, /normalizedDecision !== "feedback"[\s\S]{0,100}&& !accept/);
+  assert.match(extension, /pending\.client\.respond\(pending\.request\.id, \{ outcome: \{ outcome: "cancelled" \} \}\)/);
+  assert.match(extension, /continuePermissionFeedback\(pending, feedbackText\)/);
+  assert.match(extension, /Do not retry this write in the current turn/);
+});
+
+test("all document approvals use the same isolated temporary Diff tab", () => {
   assert.match(extension, /prepareDocumentReviewBatch\(\{/);
-  assert.match(extension, /review\.kind === "new-file"/);
-  assert.match(extension, /if \(sourceEditor\)[\s\S]*openInlineDiffPreview/);
-  assert.match(extension, /review\.kind === "full-review"/);
-  assert.match(extension, /pending\.previewKind = "compact-diff"/);
-  assert.match(extension, /pending\.previewKind = "inline-diff"/);
+  assert.match(extension, /previewKind: "isolated-diff"/);
+  assert.match(extension, /await this\.openIsolatedDiffPreview\(this\._diffPreview\)/);
+  assert.match(extension, /pending\.previewKind = source\.sourceKind === "missing"/);
+  assert.match(extension, /review\.kind === "full-review" \? "full-review" : "inline-diff"/);
   assert.match(extension, /diff:\s*pending\.diffInConfirmation \? this\.compactPermissionDiff\(pending\.diff\) : null/);
-  assert.match(extension, /registerTextDocumentContentProvider\("hermes-new-file-preview"/);
-  assert.match(extension, /createWebviewPanel\([\s\S]{0,120}REVIEW_VIEW_TYPE/);
-  assert.match(extension, /Candidate ready · Original unchanged/);
-  assert.match(extension, /data-tab="result"[\s\S]{0,80}data-tab="changes"/);
+  assert.match(extension, /registerTextDocumentContentProvider\("hermes-diff-preview"/);
+  assert.doesNotMatch(extension, /openInlineDiffPreview|openDocumentReview|openNewFilePreview/);
   const showStart = extension.indexOf("async showDocDiff(");
   const showEnd = extension.indexOf("\n  async rollbackDocDiffPreview", showStart);
   assert.doesNotMatch(extension.slice(showStart, showEnd), /workspace\.fs\.writeFile/);
 });
 
-test("completed Review closes its dedicated Editor group and restores the Agent", () => {
-  assert.match(extension, /async closeDocumentReview\(/);
-  assert.match(extension, /workbench\.action\.closeEditorsAndGroup/);
-  assert.match(extension, /group\.tabs\.length === 1/);
+test("completed temporary Diff closes only its own tab and restores the Agent", () => {
+  assert.match(extension, /async rollbackDocDiffPreview\(\)/);
+  assert.match(extension, /vscode\.window\.tabGroups\.close\(tab, true\)/);
+  assert.doesNotMatch(extension, /workbench\.action\.closeEditorsAndGroup/);
   assert.match(extension, /agentPanel\.reveal\(agentPanel\.viewColumn, false\)/);
 });
 
 test("new-file approval opens the real file only after the approved content exists", () => {
-  assert.match(extension, /accept && resolvedPreview\?\.previewKind === "new-file"/);
+  assert.match(extension, /accept && resolvedPreview\?\.sourceKind === "missing"/);
   assert.match(extension, /async openAppliedNewFile\(/);
   assert.match(extension, /Buffer\.from\(bytes\)\.toString\("utf8"\) === preview\.candidateText/);
   assert.match(extension, /await this\.openDocumentUri\(uri, \{ preview: false \}\)/);
 });
 
-test("Review feedback preserves the same temporary Editor while the candidate regenerates", () => {
-  assert.match(extension, /normalizedDecision === "feedback" && resolvedPreview\?\.previewKind === "full-review"/);
-  assert.match(extension, /rollbackDocDiffPreview\(\{ preserveReviewPanel \}\)/);
-  assert.match(extension, /Generating a revised candidate\. The original document remains unchanged\./);
+test("feedback closes the current temporary Diff and a preview action can reopen pending state", () => {
+  assert.match(extension, /const cleaned = await this\.rollbackDocDiffPreview\(\)/);
+  assert.match(extension, /normalizedDecision === "feedback"/);
   assert.match(extension, /case "reopenPermissionPreview"/);
+  assert.match(extension, /return preview\.previewKind === "isolated-diff" \? this\.openIsolatedDiffPreview\(preview\) : false/);
 });

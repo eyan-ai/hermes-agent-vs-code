@@ -262,6 +262,121 @@ async function main() {
     assert.deepStrictEqual(narrow.overflowingThreadItems, [], JSON.stringify(narrow));
     assert.ok(narrow.queueClientHeight <= 191 && narrow.queueScrollHeight > narrow.queueClientHeight, JSON.stringify(narrow));
     assert.ok(narrow.promptHeight >= 60, JSON.stringify(narrow));
+
+    await page.click("#modeBtn");
+    assert.ok(await page.locator("#modePopover.open").isVisible());
+    assert.strictEqual(await page.locator(".approval-option").count(), 2);
+    assert.strictEqual(await page.locator(".effort-field").count(), 0);
+    const naturalSettingsHeight = await page.locator("#modePopover").evaluate(node => node.getBoundingClientRect().height);
+    assert.ok(naturalSettingsHeight < 468, String(naturalSettingsHeight));
+
+    await page.evaluate(() => { window.__messages.length = 0; });
+    await page.click(".model-combobox .dropdown-icon");
+    assert.ok(await page.locator("#modelList").isVisible());
+    assert.strictEqual((await page.evaluate(() => window.__messages.filter(message => message.type === "settingsChanged").length)), 0);
+    await page.keyboard.press("Escape");
+
+    await page.click("#modelPickerInput");
+    assert.ok(await page.locator("#modelList").isVisible());
+    assert.strictEqual(await page.locator("#settingsOverlayRoot > #modelList").count(), 1);
+    await page.locator("#modelPickerInput").press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.locator("#modelPickerInput").fill("Anthropic");
+    assert.strictEqual(await page.locator("#modelList .model-option").count(), 1);
+    const attachedModelList = await page.evaluate(() => {
+      const trigger = document.querySelector(".model-combobox").getBoundingClientRect();
+      const list = document.querySelector("#modelList").getBoundingClientRect();
+      const direction = document.querySelector("#modelList").classList.contains("opens-up") ? "up" : "down";
+      return {
+        direction,
+        gap: direction === "up" ? Math.abs(list.bottom - trigger.top) : Math.abs(list.top - trigger.bottom),
+        insideViewport: list.top >= 0 && list.bottom <= window.innerHeight,
+        triggerVisible: list.bottom <= trigger.top || list.top >= trigger.bottom
+      };
+    });
+    assert.ok(attachedModelList.gap < 0.5, JSON.stringify(attachedModelList));
+    assert.ok(attachedModelList.insideViewport, JSON.stringify(attachedModelList));
+    assert.ok(attachedModelList.triggerVisible, JSON.stringify(attachedModelList));
+
+    await page.keyboard.press("Escape");
+    assert.strictEqual(await page.locator("#modelPickerInput").inputValue(), "GPT-5.6 Codex");
+    assert.strictEqual((await page.evaluate(() => window.__messages.filter(message => message.type === "settingsChanged").length)), 0);
+
+    await page.click("#modelPickerInput");
+    await page.locator("#modelPickerInput").fill("DeepSeek");
+    await page.click(".modes-title");
+    assert.strictEqual(await page.locator("#modelList").count(), 0);
+    assert.strictEqual(await page.locator("#modelPickerInput").inputValue(), "GPT-5.6 Codex");
+    assert.strictEqual((await page.evaluate(() => window.__messages.filter(message => message.type === "settingsChanged").length)), 0);
+
+    await page.click("#modelPickerInput");
+    await page.locator("#modelPickerInput").fill("Legacy");
+    assert.strictEqual(await page.locator("#modelList .model-option.unavailable").count(), 1);
+    await page.keyboard.press("Enter");
+    assert.strictEqual((await page.evaluate(() => window.__messages.filter(message => message.type === "settingsChanged").length)), 0);
+    await page.keyboard.press("Escape");
+
+    await page.evaluate(() => { window.__messages.length = 0; });
+    await page.click("#modelPickerInput");
+    await page.locator("#modelPickerInput").fill("Anthropic");
+    await page.click("#modelList .model-option-main");
+    const clickSettings = await page.evaluate(() => window.__messages.filter(message => message.type === "settingsChanged"));
+    assert.strictEqual(clickSettings.length, 1);
+    assert.strictEqual(clickSettings[0].settings.model, "anthropic:claude-sonnet-4");
+    assert.strictEqual(clickSettings[0].settings.mode, "Manual");
+    assert.strictEqual(await page.locator(".approval-option").count(), 2);
+    assert.strictEqual((await page.locator(".approval-option.active strong").innerText()).trim(), "Manual");
+
+    await page.evaluate(() => { window.__messages.length = 0; });
+    await page.click("#modelPickerInput");
+    await page.locator("#modelPickerInput").fill("Google");
+    await page.keyboard.press("Enter");
+    const enterSettings = await page.evaluate(() => window.__messages.filter(message => message.type === "settingsChanged"));
+    assert.strictEqual(enterSettings.length, 1);
+    assert.strictEqual(enterSettings[0].settings.model, "google:gemini-2.5-pro");
+    assert.strictEqual(enterSettings[0].settings.mode, "Manual");
+
+    await page.evaluate(() => { window.__messages.length = 0; });
+    await page.click("#modelPickerInput");
+    await page.locator("#modelPickerInput").fill("Qwen");
+    await page.click("#refreshModels");
+    assert.strictEqual(await page.locator("#modelList").count(), 0);
+    assert.strictEqual((await page.evaluate(() => window.__messages.filter(message => message.type === "refreshModels").length)), 1);
+    await page.click("#modelPickerInput");
+    assert.strictEqual(await page.locator("#modelList .model-option").count(), 6);
+
+    await page.setViewportSize({ width: 360, height: 430 });
+    await page.waitForTimeout(20);
+    const resizedModelList = await page.evaluate(() => {
+      const trigger = document.querySelector(".model-combobox").getBoundingClientRect();
+      const list = document.querySelector("#modelList").getBoundingClientRect();
+      const direction = document.querySelector("#modelList").classList.contains("opens-up") ? "up" : "down";
+      return {
+        gap: direction === "up" ? Math.abs(list.bottom - trigger.top) : Math.abs(list.top - trigger.bottom),
+        insideViewport: list.top >= 0 && list.bottom <= window.innerHeight,
+        triggerVisible: list.bottom <= trigger.top || list.top >= trigger.bottom
+      };
+    });
+    assert.ok(resizedModelList.gap < 0.5, JSON.stringify(resizedModelList));
+    assert.ok(resizedModelList.insideViewport, JSON.stringify(resizedModelList));
+    assert.ok(resizedModelList.triggerVisible, JSON.stringify(resizedModelList));
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 360, height: 780 });
+
+    await page.evaluate(() => {
+      window.__statePayload.settings.reasoningEffortSupported = true;
+      window.__statePayload.settings.modelRefreshStatus = "idle";
+      window.__dispatchState();
+    });
+    assert.strictEqual(await page.locator(".effort-field").count(), 1);
+    const effortSettingsHeight = await page.locator("#modePopover").evaluate(node => node.getBoundingClientRect().height);
+    const effortFieldHeight = await page.locator(".effort-field").evaluate(node => node.getBoundingClientRect().height);
+    assert.ok(Math.abs((effortSettingsHeight - naturalSettingsHeight) - effortFieldHeight) < 1, JSON.stringify({ naturalSettingsHeight, effortSettingsHeight, effortFieldHeight }));
+    await page.click("#effortPickerButton");
+    assert.strictEqual(await page.locator("#settingsOverlayRoot > #effortList").count(), 1);
+    assert.strictEqual(await page.locator("#effortList .effort-option").count(), 6);
+    await page.keyboard.press("Escape");
+    assert.strictEqual(await page.locator(".approval-option").count(), 2);
+    assert.strictEqual((await page.locator(".approval-option.active strong").innerText()).trim(), "Manual");
     await page.screenshot({ path: path.join(artifacts, "webview-360.png"), fullPage: true });
 
   await page.click("#queueToggle");

@@ -6,7 +6,7 @@ const { spawn } = require("child_process");
 const { createChatParser } = require("./lib/chat-parser");
 const { AcpClient } = require("./lib/acp-client");
 const { createAcpRenderer } = require("./lib/acp-render");
-const { changedLineIndices, locatePreviewForRemoval } = require("./lib/diff-preview");
+const { buildInlineDiffDocument, changedLineIndices, sourceSnapshotMatches } = require("./lib/diff-preview");
 const { TurnLifecycle, TurnCancelledError, isTurnCancelled } = require("./lib/turn-lifecycle");
 const { buildCommandCatalog, DEFAULT_ACP_COMMANDS, parseQuickCommands, resolveCommand } = require("./lib/command-catalog");
 const { textOf } = require("./lib/acp-text");
@@ -14,12 +14,14 @@ const { PromptQueue, resolveSubmission } = require("./lib/prompt-queue");
 const { SessionCancellationBarrier } = require("./lib/session-cancellation-barrier");
 const { forkAcpSession, installAcpSessionReplacement } = require("./lib/acp-session-handoff");
 const { buildGeneratedDocumentCandidates } = require("./lib/generated-document");
-const { configuredModelState, normalizeModelState, resolveSelectedModel } = require("./lib/model-settings");
+const { buildHermesPromptBlocks, mergeHermesSessions } = require("./lib/hermes-sessions");
+const { configuredModelState, mergeRefreshedModels, normalizeModelState, rememberReasoningEffort, resolveSelectedModel } = require("./lib/model-settings");
 const { prepareDocumentReviewBatch } = require("./lib/document-review");
+const { projectV4aUpdatePreview } = require("./lib/v4a-preview");
+const { applyAutomaticTitle, applyManualTitle, inferTitleOrigin } = require("./lib/session-title");
 
 const VIEW_ID = "hermesAgent.sidebar";
 const EDITOR_VIEW_TYPE = "hermesAgent.editorSession";
-const REVIEW_VIEW_TYPE = "hermesAgent.documentReview";
 const SESSION_KEY = "hermesAgent.sessions";
 const FINAL_ANSWER_ONLY_PROMPT = `The task execution has ended, but no user-facing final answer was produced.
 
@@ -33,6 +35,7 @@ Requirements:
 - Briefly state the result.
 - If the task failed or is incomplete, explain that clearly.
 - The response must not be empty.`;
+const SOURCE_DIVERGENCE_FEEDBACK = "The source document changed during Diff approval. Do not retry this write in the current turn. In the final response, explain that the update was not applied because the user changed the original document.";
 
 const HERMES_HOME = path.join(os.homedir(), ".hermes");
 const HERMES_DOC_PATHS = {
@@ -167,7 +170,7 @@ function activate(context) {
     vscode.window.onDidChangeActiveTextEditor(editor => {
       // Track the last active document across focus changes (the webview
       // steals focus when typing, so activeTextEditor goes undefined there).
-      if (editor) provider.lastActiveEditor = editor;
+      if (editor && editor.document.uri.scheme !== "hermes-diff-preview") provider.lastActiveEditor = editor;
       provider.refreshEditorContext();
       provider.ensureEditorIsolation();
     }),
@@ -209,6 +212,7 @@ class HermesSidebarProvider {
     this.acpRenderers = new Map();
     this.acpAvailableCommands = new Map();
     this.acpCommandCaptures = new Map();
+    this._sessionRefreshPromise = undefined;
     this.retiredAcpSessions = new Set();
     this.activeTurns = new Map();
     this.mockTurns = new Set();
@@ -227,18 +231,14 @@ class HermesSidebarProvider {
     this._diffPreviewProvider = vscode.workspace.registerTextDocumentContentProvider("hermes-diff-preview", {
       provideTextDocumentContent: uri => this.diffPreviewDocuments.get(uri.toString()) || ""
     });
-    this._newFilePreviewProvider = vscode.workspace.registerTextDocumentContentProvider("hermes-new-file-preview", {
-      provideTextDocumentContent: uri => this.diffPreviewDocuments.get(uri.toString()) || ""
-    });
-    this.context.subscriptions.push(this._diffPreviewProvider, this._newFilePreviewProvider);
-    this._documentReviewPanel = undefined;
-    this._documentReviewContext = undefined;
+    this.context.subscriptions.push(this._diffPreviewProvider);
     this._movingEditorTabs = false;
   }
 
   resolveWebviewView(view) {
     this.view = view;
     this.configureWebview(view.webview);
+    this.refreshHermesSessions().catch(() => {});
   }
 
   post(message, explicitSessionId) {
@@ -277,6 +277,7 @@ class HermesSidebarProvider {
     if (Array.isArray(saved) && saved.length > 0) {
       return saved.map(session => ({
         ...session,
+        titleOrigin: inferTitleOrigin(session),
         messages: (session.messages || [])
           .filter(message => !(message.role === "system" && message.command === "/deny"))
           .map(message => message.role === "assistant" && message.status === "running"
@@ -290,6 +291,7 @@ class HermesSidebarProvider {
   saveSessions() {
     return this.context.globalState.update(SESSION_KEY, this.sessions);
   }
+
 
   activeSession(sessionId = this.activeSessionId) {
     let session = this.sessions.find(item => item.id === sessionId);
@@ -377,12 +379,6 @@ class HermesSidebarProvider {
     if (!(tab?.input instanceof vscode.TabInputWebview)) return false;
     return tab.input.viewType === EDITOR_VIEW_TYPE
       || tab.input.viewType === `mainThreadWebview-${EDITOR_VIEW_TYPE}`;
-  }
-
-  isReviewTab(tab) {
-    if (!(tab?.input instanceof vscode.TabInputWebview)) return false;
-    return tab.input.viewType === REVIEW_VIEW_TYPE
-      || tab.input.viewType === `mainThreadWebview-${REVIEW_VIEW_TYPE}`;
   }
 
   isDocumentTab(tab) {
@@ -501,6 +497,7 @@ class HermesSidebarProvider {
       case "ready":
         this.postState();
         this.refreshEditorContext();
+        this.refreshHermesSessions().catch(() => {});
         break;
       case "newSession":
         {
@@ -514,14 +511,6 @@ class HermesSidebarProvider {
         else this.activeSessionId = message.id;
         await this.saveSessions();
         this.postState();
-        // Re-sync the server-generated title for a previously-open session
-        // (the AI title may have been generated after we last saw it).
-        {
-          const selected = this.sessions.find(s => s.id === message.id);
-          if (selected && selected.acpSessionId) {
-            this.syncAcpTitle(selected.acpSessionId, selected.id);
-          }
-        }
         break;
       case "renameSession":
         await this.renameSession(message.id, message.title);
@@ -577,6 +566,14 @@ class HermesSidebarProvider {
         });
         break;
       }
+      case "abandonDiffPreview": {
+        await this.resolveDiffPermission(false, {
+          sessionId: message.sessionId || sessionId,
+          requestId: message.requestId,
+          abandonUnsafePreview: true
+        });
+        break;
+      }
       case "reopenPermissionPreview":
         await this.reopenPermissionPreview(message.sessionId || sessionId, message.requestId);
         break;
@@ -600,6 +597,9 @@ class HermesSidebarProvider {
       case "settingsChanged":
         await this.updateSessionSettings(sessionId, message.settings || {});
         break;
+      case "refreshModels":
+        await this.refreshModels(sessionId);
+        break;
       default:
         break;
     }
@@ -608,7 +608,9 @@ class HermesSidebarProvider {
   async renameSession(id, title) {
     const session = this.sessions.find(item => item.id === id);
     if (!session) return;
-    session.title = (title || "Untitled").trim() || "Untitled";
+    const nextTitle = String(title || "").trim() || "Untitled";
+    const hermesSessionId = String(session.acpSessionId || "").trim();
+    applyManualTitle(session, nextTitle);
     session.updatedAt = Date.now();
     await this.saveSessions();
     this.postState();
@@ -617,6 +619,31 @@ class HermesSidebarProvider {
   modelStateForSession(session) {
     const runtime = session?.modelState;
     return runtime?.options?.length ? runtime : hermesModelState();
+  }
+
+  async refreshModels(sessionId) {
+    const session = this.activeSession(sessionId);
+    if (session.modelRefreshStatus === "refreshing") return false;
+    const previous = this.modelStateForSession(session);
+    session.modelRefreshStatus = "refreshing";
+    this.postState();
+    try {
+      _hermesConfig = null;
+      _hermesModelState = null;
+      const refreshed = hermesModelState();
+      const selected = String(session.settings?.model || previous.current || "");
+      session.modelState = mergeRefreshedModels(previous, refreshed, selected);
+      session.modelRefreshStatus = "refreshed";
+      await this.saveSessions();
+      this.postState();
+      return true;
+    } catch (error) {
+      session.modelState = previous;
+      session.modelRefreshStatus = "failed";
+      vscode.window.showErrorMessage(`Unable to refresh Hermes models: ${error.message}`);
+      this.postState();
+      return false;
+    }
   }
 
   async updateSessionSettings(sessionId, settings) {
@@ -643,7 +670,32 @@ class HermesSidebarProvider {
         return false;
       }
     }
-    session.settings = { ...previous, mode, model: selectedModel };
+    const requestedEffort = String(settings.reasoningEffort || "").toLowerCase();
+    const reasoningByModel = rememberReasoningEffort(previous.reasoningByModel || {}, selectedModel, requestedEffort);
+    const effectiveEffort = selectedModel && reasoningByModel[selectedModel];
+    const reasoningChanged = Boolean(requestedEffort && effectiveEffort !== previous.reasoningByModel?.[selectedModel]);
+    const modelChanged = Boolean(selectedModel && selectedModel !== previous.model);
+    if (effectiveEffort && session.reasoningEffortSupported && acpSessionId && this.acp && (reasoningChanged || modelChanged)) {
+      try {
+        await this.acp.request("session/set_config_option", {
+          sessionId: acpSessionId,
+          configId: "reasoning_effort",
+          value: effectiveEffort
+        });
+      } catch (error) {
+        vscode.window.showErrorMessage(`Unable to set Hermes reasoning effort: ${error.message}`);
+        if (modelChanged) {
+          session.settings = { ...previous, mode, model: selectedModel };
+          if (session.modelState?.options?.length) session.modelState.current = selectedModel;
+          saveLastMode(this.context, mode);
+          saveLastModel(this.context, selectedModel);
+          await this.saveSessions();
+        }
+        this.postState();
+        return false;
+      }
+    }
+    session.settings = { ...previous, mode, model: selectedModel, reasoningByModel };
     if (session.modelState?.options?.length && selectedModel) session.modelState.current = selectedModel;
     saveLastMode(this.context, mode);
     if (selectedModel) saveLastModel(this.context, selectedModel);
@@ -656,10 +708,10 @@ class HermesSidebarProvider {
     if (this.sessions.length <= 1) return;
     const index = this.sessions.findIndex(item => item.id === id);
     if (index < 0) return;
-    await this.cancelPermissionsForSession(id);
-    // Drop the ACP session mapping (the server session stays alive until
-    // its process exits; the renderer is gone with the UI session).
+    // Standard ACP has no portable delete-session method. Keep deletion local
+    // so it works with every Hermes version without changing the server DB.
     const acpSessionId = this.acpSessions.get(id);
+    await this.cancelPermissionsForSession(id);
     if (acpSessionId) {
       this.permissionSessionGrants.delete(acpSessionId);
       this.acpRenderers.delete(acpSessionId);
@@ -902,11 +954,43 @@ class HermesSidebarProvider {
     return { command, args, entry: undefined };
   }
 
-  applyAcpSessionState(session, acpSessionId, models) {
+  applyAcpSessionState(session, acpSessionId, models, configOptions) {
     this.acpSessions.set(session.id, acpSessionId);
     session.acpSessionId = acpSessionId;
     const runtimeModels = normalizeModelState(models);
     if (runtimeModels.options.length) session.modelState = runtimeModels;
+    const options = Array.isArray(configOptions) ? configOptions : [];
+    session.reasoningEffortSupported = options.some(option => (
+      option?.id === "reasoning_effort" || option?.configId === "reasoning_effort" || option?.config_id === "reasoning_effort"
+    ));
+  }
+
+  async refreshHermesSessions() {
+    if (this._sessionRefreshPromise) return this._sessionRefreshPromise;
+    this._sessionRefreshPromise = (async () => {
+      const config = vscode.workspace.getConfiguration("hermesAgent");
+      const command = config.get("command", "");
+      if (!command || !config.get("useAcp", true)) return false;
+      const client = await this.ensureAcp(command);
+      const remoteSessions = [];
+      let cursor;
+      do {
+        const page = await client.request("session/list", cursor ? { cursor } : {});
+        remoteSessions.push(...(page?.sessions || []));
+        cursor = page?.nextCursor || page?.next_cursor || "";
+      } while (cursor);
+
+      const activeHermesId = this.sessions.find(item => item.id === this.activeSessionId)?.acpSessionId;
+      this.sessions = mergeHermesSessions(this.sessions, remoteSessions, { createId: () => id() });
+      const active = activeHermesId
+        ? this.sessions.find(item => item.acpSessionId === activeHermesId)
+        : this.sessions.find(item => item.id === this.activeSessionId);
+      this.activeSessionId = active?.id || this.sessions[0]?.id;
+      await this.saveSessions();
+      this.postState();
+      return true;
+    })().finally(() => { this._sessionRefreshPromise = undefined; });
+    return this._sessionRefreshPromise;
   }
 
   async ensureMappedAcpSession(client, session) {
@@ -922,7 +1006,7 @@ class HermesSidebarProvider {
           sessionId: persisted,
           mcpServers: []
         });
-        this.applyAcpSessionState(session, persisted, resumed?.models);
+        this.applyAcpSessionState(session, persisted, resumed?.models, resumed?.configOptions);
         return persisted;
       } catch {
         if (this.acpSessions.get(session.id) === persisted) this.acpSessions.delete(session.id);
@@ -933,7 +1017,7 @@ class HermesSidebarProvider {
     const created = await client.request("session/new", { cwd: this.workspaceCwd(), mcpServers: [], skip_memory: true });
     const acpSessionId = String(created?.sessionId || "").trim();
     if (!acpSessionId) throw new Error("Hermes did not return an ACP session");
-    this.applyAcpSessionState(session, acpSessionId, created.models);
+    this.applyAcpSessionState(session, acpSessionId, created.models, created.configOptions);
     return acpSessionId;
   }
 
@@ -1122,8 +1206,9 @@ class HermesSidebarProvider {
       startedAt: Date.now()
     };
     session.messages.push(userMessage, assistantMessage);
-    const titleSource = `${message.command || ""}${message.command && prompt ? " " : ""}${prompt}`;
-    session.title = session.title === "Untitled" && titleSource ? titleSource.slice(0, 64) : session.title;
+    const config = vscode.workspace.getConfiguration("hermesAgent");
+    const titleSource = prompt.trim();
+    if (session.title === "Untitled" && titleSource) applyAutomaticTitle(session, titleSource.slice(0, 64));
     session.updatedAt = Date.now();
     await this.saveSessions();
     this.postState();
@@ -1309,6 +1394,18 @@ class HermesSidebarProvider {
         } else if (session.modelState?.options?.length) {
           session.modelState.current = selectedModel;
         }
+        const rememberedEffort = session.settings.reasoningByModel?.[selectedModel];
+        if (rememberedEffort && session.reasoningEffortSupported) {
+          try {
+            await client.request("session/set_config_option", {
+              sessionId: acpSessionId,
+              configId: "reasoning_effort",
+              value: rememberedEffort
+            });
+          } catch (error) {
+            vscode.window.showWarningMessage(`Unable to apply the remembered Hermes reasoning effort: ${error.message}`);
+          }
+        }
         await this.saveSessions();
         this.postState();
       }
@@ -1322,10 +1419,10 @@ class HermesSidebarProvider {
       }
       if (lifecycle.cancelled) throw new TurnCancelledError();
 
-      const composed = composeHermesPrompt(prompt, userMessage);
+      const promptBlocks = buildHermesPromptBlocks(prompt, userMessage);
       const finishReason = await client.request("session/prompt", {
         sessionId: acpSessionId,
-        prompt: [{ type: "text", text: composed }]
+        prompt: promptBlocks
       });
 
       if (finishReason?.usage) session.usage = finishReason.usage;
@@ -1359,38 +1456,20 @@ class HermesSidebarProvider {
       turn.release();
     }
     if (lifecycle.cancelled) throw new TurnCancelledError();
-    // The server generates the AI title asynchronously (up to ~30s) and
-    // notifies via session_info_update. Actively re-read the title from
-    // Hermes' state.db a bit later so the topbar gets the real title even
-    // if the notification was missed or the auxiliary titler is flaky.
-    const acpId = acpSessionId;
-    const uiId = session.id;
-    setTimeout(() => this.syncAcpTitle(acpId, uiId), 12000);
+    // The title generator can finish after the turn response. Refresh only
+    // metadata here so a newer local turn cannot be overwritten by a delayed
+    // history snapshot.
     await this.saveSessions();
     this.postState();
   }
 
-  /** Best-effort: pull the server-generated session title from state.db. */
+  /** Best-effort compatibility alias for callers that only need fresh metadata. */
   async syncAcpTitle(acpSessionId, uiSessionId) {
     try {
-      const { execFile } = require("child_process");
-      const dbPath = path.join(HERMES_HOME, "state.db");
-      const sql = `SELECT title FROM sessions WHERE id = '${String(acpSessionId).replace(/'/g, "''")}' LIMIT 1;`;
-      const title = await new Promise((resolve, reject) => {
-        execFile("sqlite3", [dbPath, sql], { timeout: 8000 }, (err, stdout) => {
-          if (err) return reject(err);
-          resolve(String(stdout || "").trim());
-        });
-      });
-      if (!title || title === "Untitled") return;
       const session = this.sessions.find(s => s.id === uiSessionId);
-      if (session && session.title !== title) {
-        session.title = title;
-        session.updatedAt = Date.now();
-        await this.saveSessions();
-        this.postState();
+      if (session && String(session.acpSessionId || "") === String(acpSessionId || "")) {
       }
-    } catch { /* state.db read is best-effort; the notification path may still deliver */ }
+    } catch { /* Older Hermes may not expose the snapshot extension method. */ }
   }
 
   /** Lazily spawn `hermes acp` once and wire the session/update handler. */
@@ -1409,6 +1488,15 @@ class HermesSidebarProvider {
             this.postState();
             return;
           }
+          if (update.sessionUpdate === "config_option_update") {
+            const session = this.sessions.find(s => this.acpSessions.get(s.id) === acpSessionId);
+            if (session) {
+              const configOptions = update.configOptions || update.config_options || [];
+              this.applyAcpSessionState(session, acpSessionId, undefined, configOptions);
+              this.postState();
+            }
+            return;
+          }
           const commandCapture = this.acpCommandCaptures.get(acpSessionId);
           if (commandCapture && update.sessionUpdate === "agent_message_chunk") {
             commandCapture.push(textOf(update.content));
@@ -1422,11 +1510,9 @@ class HermesSidebarProvider {
             const title = update.title || "";
             if (title) {
               const session = [...this.sessions].find(s => this.acpSessions.get(s.id) === acpSessionId);
-              if (session && session.title !== title) {
-                session.title = title;
-                session.updatedAt = Date.now();
-                this.saveSessions().then(() => this.postState());
-              }
+              // Scheme 3 keeps titles local. Hermes may derive a title from
+              // command/resource metadata that the plugin intentionally hides.
+              if (session && session.titleOrigin !== "manual") this.postState();
             }
           }
           this.expirePermissionFromSessionUpdate(update, acpSessionId);
@@ -1456,6 +1542,11 @@ class HermesSidebarProvider {
             ? toolCall.content.filter(block => block && block.type === "diff")
             : [];
           const diff = diffs[0] || null;
+          const previewProjection = projectV4aUpdatePreview(toolCall);
+          if (previewProjection.kind === "invalid" && diff) {
+            client.respond(request.id, { outcome: { outcome: "cancelled" } });
+            return;
+          }
           const isFileMutation = Boolean(diffs.length)
             || /^(write|edit|patch|delete|remove|rename|create|touch|rm|mv)\b|^(write_file|edit_file|delete_file)/i.test(toolName);
           const scope = this.permissionScope(toolCall, diff);
@@ -1481,6 +1572,7 @@ class HermesSidebarProvider {
             toolCall,
             diff,
             diffs,
+            previewProjection,
             scope,
             intent: this.permissionIntent(toolCall, options, diffs),
             denyAvailable: Boolean(deny)
@@ -1546,7 +1638,7 @@ class HermesSidebarProvider {
       await client.request("initialize", {
         protocolVersion: 1,
         clientCapabilities: {},
-        clientInfo: { name: "hermes-agent-vscode", version: "0.2.50" }
+        clientInfo: { name: "hermes-agent-vscode", version: "0.2.54" }
       });
     } catch (err) {
       client.intentionalStop = true;
@@ -1682,7 +1774,8 @@ class HermesSidebarProvider {
       choices: this.permissionChoicesForPending(pending),
       allowFeedback: true,
       diff: pending.diffInConfirmation ? this.compactPermissionDiff(pending.diff) : null,
-      previewAction: pending.previewAction || ""
+      previewAction: pending.previewAction || "",
+      previewDiverged: Boolean(pending.previewDiverged)
     };
   }
 
@@ -1692,24 +1785,6 @@ class HermesSidebarProvider {
     return path.isAbsolute(file)
       ? vscode.Uri.file(file)
       : vscode.Uri.file(path.join(this.workspaceCwd(), file));
-  }
-
-  openDocumentGroup(uri) {
-    const target = uri?.toString();
-    if (!target) return undefined;
-    return vscode.window.tabGroups.all.find(group => group.tabs.some(tab => this.tabUri(tab)?.toString() === target));
-  }
-
-  async openEditorForExistingDocument(uri, document) {
-    const target = uri?.toString();
-    const visible = vscode.window.visibleTextEditors.find(editor => editor.document.uri.toString() === target);
-    if (visible) return visible;
-    const group = this.openDocumentGroup(uri);
-    if (!group || !document) return undefined;
-    return vscode.window.showTextDocument(document, {
-      preview: false,
-      viewColumn: group.viewColumn
-    });
   }
 
   compactPermissionDiff(diff) {
@@ -2051,8 +2126,7 @@ class HermesSidebarProvider {
       replacementSessionId: replacementAcpSessionId,
       session
     });
-    const runtimeModels = normalizeModelState(forked.models);
-    if (runtimeModels.options.length) session.modelState = runtimeModels;
+    this.applyAcpSessionState(session, replacementAcpSessionId, forked.models, forked.configOptions);
     const availableCommands = this.acpAvailableCommands.get(oldAcpSessionId);
     if (availableCommands) this.acpAvailableCommands.set(replacementAcpSessionId, availableCommands);
     await this.saveSessions();
@@ -2112,7 +2186,7 @@ class HermesSidebarProvider {
         sessionId: oldAcpSessionId,
         mcpServers: []
       });
-      this.applyAcpSessionState(session, oldAcpSessionId, resumed?.models);
+      this.applyAcpSessionState(session, oldAcpSessionId, resumed?.models, resumed?.configOptions);
       this.retiredAcpSessions.delete(oldAcpSessionId);
       await this.saveSessions();
     } catch (error) {
@@ -2277,64 +2351,31 @@ class HermesSidebarProvider {
     }
   }
 
-  async readFileTextIfExists(uri) {
-    try {
-      const bytes = await vscode.workspace.fs.readFile(uri);
-      return Buffer.from(bytes).toString("utf8");
-    } catch (error) {
-      if (this.isFileNotFound(error)) return undefined;
-      throw error;
-    }
-  }
-
   async diffSourceMatches(preview) {
     const uri = vscode.Uri.parse(preview.uri);
     const document = vscode.workspace.textDocuments.find(item => item.uri.toString() === preview.uri);
-    if (preview.previewKind === "inline-diff") {
-      return Boolean(document
-        && document.version === preview.documentVersion
-        && document.getText() === preview.previewText);
-    }
-    if (preview.sourceKind === "missing") {
-      if (document) return false;
-      try {
-        await vscode.workspace.fs.stat(uri);
-        return false;
-      } catch (error) {
-        if (this.isFileNotFound(error)) return true;
-        throw error;
-      }
-    }
-    if (preview.sourceKind === "document") {
-      if (document) {
-        return document.version === preview.documentVersion && document.getText() === preview.sourceText;
-      }
-      try {
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        return Buffer.from(bytes).toString("utf8") === preview.sourceText;
-      } catch (error) {
-        if (this.isFileNotFound(error)) return false;
-        throw error;
-      }
-    }
-    if (document && document.getText() !== preview.sourceText) return false;
+    let filePresent = true;
+    let fileText = "";
     try {
       const bytes = await vscode.workspace.fs.readFile(uri);
-      return Buffer.from(bytes).toString("utf8") === preview.sourceText;
+      fileText = Buffer.from(bytes).toString("utf8");
     } catch (error) {
-      if (this.isFileNotFound(error)) return false;
-      throw error;
+      if (!this.isFileNotFound(error)) throw error;
+      filePresent = false;
     }
+    return sourceSnapshotMatches(preview, {
+      documentPresent: Boolean(document),
+      documentText: document?.getText(),
+      filePresent,
+      fileText
+    });
   }
 
   async showDocDiff(diffInput, { pending = this.pendingPermission } = {}) {
     const diffs = (Array.isArray(diffInput) ? diffInput : [diffInput]).filter(Boolean);
     const diff = diffs[0];
     const file = diff && (diff.path || diff.file || "");
-    const reuseReviewPanel = Boolean(file && pending && this._documentReviewContext
-      && this._documentReviewContext.uiSessionId === pending.uiSessionId
-      && this._documentReviewContext.file === file);
-    const previousCleaned = await this.rollbackDocDiffPreview({ preserveReviewPanel: reuseReviewPanel });
+    const previousCleaned = await this.rollbackDocDiffPreview();
     if (!previousCleaned) {
       vscode.window.showErrorMessage("The previous Diff preview changed and could not be removed safely.");
       return false;
@@ -2359,25 +2400,22 @@ class HermesSidebarProvider {
       vscode.window.showWarningMessage("Hermes expected existing text, but the target file does not exist.");
       return false;
     }
-    const sourceEditor = source.document
-      ? await this.openEditorForExistingDocument(uri, source.document)
-      : undefined;
-    const fallbackOffset = sourceEditor ? source.document.offsetAt(sourceEditor.selection.active) : 0;
+    const sourceEditor = vscode.window.visibleTextEditors.find(editor => editor.document.uri.toString() === uri.toString());
+    const fallbackOffset = sourceEditor ? sourceEditor.document.offsetAt(sourceEditor.selection.active) : 0;
     const sourceText = source.sourceText;
+    const previewDiffs = pending?.previewProjection?.kind === "ready"
+      ? [pending.previewProjection.diff]
+      : normalizedDiffs;
     const review = prepareDocumentReviewBatch({
       sourceKind: source.sourceKind,
       sourceText,
-      diffs: normalizedDiffs,
+      diffs: previewDiffs,
       fallbackOffset
     });
     if (!review) {
       vscode.window.showWarningMessage("Hermes could not locate the requested text for Diff preview.");
       return false;
     }
-    if (review.kind !== "full-review" && this._documentReviewPanel) {
-      await this.closeDocumentReview({ restoreSessionId: pending?.uiSessionId });
-    }
-
     this._diffPreview = {
       ...review.edit,
       uri: uri.toString(),
@@ -2385,238 +2423,91 @@ class HermesSidebarProvider {
       file,
       candidateText: review.candidateText,
       operations: review.operations,
-      previewKind: review.kind,
+      previewKind: "isolated-diff",
       sourceText,
       sourceKind: source.sourceKind,
-      documentVersion: source.documentVersion,
       uiSessionId: pending?.uiSessionId
     };
     if (pending) {
-      pending.diff = {
-        path: file,
-        oldText: review.edit.oldText,
-        newText: review.edit.newText
-      };
-      pending.diffInConfirmation = false;
-      pending.previewKind = review.kind;
-      pending.previewAction = "";
-    }
-
-    if (review.kind === "new-file") {
-      if (pending) pending.previewAction = "Open file preview";
-      await this.openNewFilePreview(this._diffPreview);
-      return true;
-    }
-    if (sourceEditor) {
-      if (this._documentReviewPanel) await this.closeDocumentReview({ restoreSessionId: pending?.uiSessionId });
-      this._diffPreview.previewKind = "inline-diff";
-      if (pending) {
-        pending.previewKind = "inline-diff";
-        pending.previewAction = "Show Diff in document";
+      if (pending?.previewProjection?.kind !== "ready") {
+        pending.diff = {
+          path: file,
+          oldText: review.edit.oldText,
+          newText: review.edit.newText
+        };
       }
-      await this.openInlineDiffPreview(this._diffPreview, sourceEditor);
-      return true;
+      pending.diffInConfirmation = false;
+      pending.previewKind = source.sourceKind === "missing"
+        ? "new-file"
+        : review.kind === "full-review" ? "full-review" : "inline-diff";
+      pending.previewAction = pending.previewKind === "new-file"
+        ? "Open file preview"
+        : pending.previewKind === "full-review" ? "Open full review" : "Show Diff in document";
     }
-    if (review.kind === "full-review") {
-      if (pending) pending.previewAction = "Open full review";
-      await this.openDocumentReview(this._diffPreview, pending);
-      return true;
-    }
-    this._diffPreview.previewKind = "compact-diff";
-    if (pending) {
-      pending.previewKind = "compact-diff";
-      pending.diffInConfirmation = true;
-    }
+    await this.openIsolatedDiffPreview(this._diffPreview);
     return true;
   }
 
-  async openNewFilePreview(preview) {
+  async openIsolatedDiffPreview(preview) {
     if (!preview) return false;
-    if (preview.previewUri) {
-      const existing = vscode.workspace.textDocuments.find(document => document.uri.toString() === preview.previewUri);
-      if (existing) {
-        await vscode.window.showTextDocument(existing, { preview: false, viewColumn: await this.ensureDocumentColumn() });
-        return true;
-      }
+    if (!preview.virtualText) {
+      const projection = buildInlineDiffDocument(preview, preview.sourceText);
+      preview.virtualText = projection.text;
+      preview.deletedRanges = projection.deletedRanges;
+      preview.addedRanges = projection.addedRanges;
     }
-    const previewUri = vscode.Uri.from({
-      scheme: "hermes-new-file-preview",
-      path: `/${path.basename(preview.file)}`,
-      query: `id=${id()}`
-    });
-    this.diffPreviewDocuments.set(previewUri.toString(), preview.candidateText);
+    if (!preview.previewUri) {
+      preview.previewUri = vscode.Uri.from({
+        scheme: "hermes-diff-preview",
+        path: `/${path.basename(preview.file)}`,
+        query: `id=${id()}`
+      }).toString();
+    }
+    this.diffPreviewDocuments.set(preview.previewUri, preview.virtualText);
+    let document = vscode.workspace.textDocuments.find(item => item.uri.toString() === preview.previewUri);
     try {
-      const previewDocument = await vscode.workspace.openTextDocument(previewUri);
-      await vscode.window.showTextDocument(previewDocument, {
+      if (!document) document = await vscode.workspace.openTextDocument(vscode.Uri.parse(preview.previewUri));
+      const editor = await vscode.window.showTextDocument(document, {
         preview: false,
         viewColumn: await this.ensureDocumentColumn()
       });
-    } catch (error) {
-      this.diffPreviewDocuments.delete(previewUri.toString());
-      throw error;
-    }
-    preview.previewUri = previewUri.toString();
-    return true;
-  }
-
-  async openInlineDiffPreview(preview, existingEditor) {
-    if (!preview) return false;
-    const uri = vscode.Uri.parse(preview.uri);
-    let editor = existingEditor;
-    if (!editor || editor.document.uri.toString() !== preview.uri) {
-      const document = vscode.workspace.textDocuments.find(item => item.uri.toString() === preview.uri);
-      editor = await this.openEditorForExistingDocument(uri, document);
-    }
-    if (!editor) return false;
-    const document = editor.document;
-
-    if (!preview.inlineApplied) {
-      preview.diskTextBefore = await this.readFileTextIfExists(uri);
-      preview.wasDirtyBefore = document.isDirty;
-      if (preview.insertText) {
-        const applied = await editor.edit(builder => {
-          builder.insert(document.positionAt(preview.insertOffset), preview.insertText);
-        }, { undoStopBefore: true, undoStopAfter: true });
-        if (!applied) throw new Error("VS Code rejected the temporary inline Diff preview");
-      }
-      preview.inlineApplied = true;
-      preview.previewText = document.getText();
-      preview.documentVersion = document.version;
-    }
-
-    this.disposeDocDiffUi();
-    this._diffEditor = editor;
-    this.docDiffDecorations = [];
-
-    const changedLines = changedLineIndices(preview.oldText, preview.newText);
-    const oldStartLine = document.positionAt(preview.oldStart).line;
-    if (changedLines.old.length) {
-      const deleted = vscode.window.createTextEditorDecorationType({
+      this.disposeDocDiffUi();
+      this._diffEditor = editor;
+      this.docDiffDecorations = [];
+      const decorate = (ranges, options) => {
+        if (!ranges?.length) return [];
+        const decoration = vscode.window.createTextEditorDecorationType(options);
+        const editorRanges = ranges.map(range => new vscode.Range(
+          document.positionAt(range.start),
+          document.positionAt(range.end)
+        ));
+        editor.setDecorations(decoration, editorRanges);
+        this.docDiffDecorations.push(decoration);
+        return editorRanges;
+      };
+      const deletedRanges = decorate(preview.deletedRanges, {
         backgroundColor: new vscode.ThemeColor("diffEditor.removedTextBackground"),
         light: { backgroundColor: "rgba(196, 54, 54, 0.22)" },
         dark: { backgroundColor: "rgba(184, 62, 62, 0.30)" },
         isWholeLine: true,
         overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.deletedForeground")
       });
-      editor.setDecorations(deleted, changedLines.old.map(index => document.lineAt(oldStartLine + index).range));
-      this.docDiffDecorations.push(deleted);
-    }
-
-    let revealEnd = document.positionAt(preview.oldEnd);
-    if (preview.contentEnd > preview.contentStart && changedLines.new.length) {
-      const added = vscode.window.createTextEditorDecorationType({
+      const addedRanges = decorate(preview.addedRanges, {
         backgroundColor: new vscode.ThemeColor("diffEditor.insertedTextBackground"),
         light: { backgroundColor: "rgba(40, 142, 76, 0.20)" },
         dark: { backgroundColor: "rgba(54, 148, 82, 0.28)" },
         overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.addedForeground"),
         isWholeLine: true
       });
-      const newStartLine = document.positionAt(preview.contentStart).line;
-      const addedRanges = changedLines.new.map(index => document.lineAt(newStartLine + index).range);
-      editor.setDecorations(added, addedRanges);
-      this.docDiffDecorations.push(added);
-      revealEnd = addedRanges[addedRanges.length - 1].end;
-    }
-    preview.revealStart = preview.oldStart;
-    preview.revealEnd = document.offsetAt(revealEnd);
-    editor.revealRange(new vscode.Range(document.positionAt(preview.revealStart), revealEnd), vscode.TextEditorRevealType.InCenter);
-    return true;
-  }
-
-  reviewColumn() {
-    const agentColumn = this.findAgentColumn();
-    return agentColumn === undefined ? vscode.ViewColumn.Beside : Math.min(vscode.ViewColumn.Nine, agentColumn + 1);
-  }
-
-  async openDocumentReview(preview, pending = this.pendingPermission) {
-    if (!preview) return false;
-    const context = {
-      file: preview.file,
-      uiSessionId: pending?.uiSessionId,
-      preview
-    };
-    this._documentReviewContext = context;
-    let panel = this._documentReviewPanel;
-    if (!panel) {
-      panel = vscode.window.createWebviewPanel(
-        REVIEW_VIEW_TYPE,
-        `Review: ${path.basename(preview.file)}`,
-        this.reviewColumn(),
-        { enableScripts: true, enableFindWidget: true, retainContextWhenHidden: true }
-      );
-      this._documentReviewPanel = panel;
-      panel.onDidDispose(() => {
-        if (this._documentReviewPanel === panel) this._documentReviewPanel = undefined;
-      });
-    } else {
-      panel.title = `Review: ${path.basename(preview.file)}`;
-      panel.reveal(this.reviewColumn(), false);
-    }
-    panel.webview.html = this.documentReviewHtml(panel.webview, context);
-    return true;
-  }
-
-  documentReviewHtml(webview, context) {
-    const nonce = id();
-    const preview = context.preview;
-    const result = escapeHtml(preview.candidateText);
-    const changes = (preview.operations || []).map(operation => {
-      const sign = operation.type === "delete" ? "−" : operation.type === "add" ? "+" : "";
-      const oldLine = operation.oldLine || "";
-      const newLine = operation.newLine || "";
-      return `<div class="change-row ${operation.type}"><span class="line-no">${oldLine}</span><span class="line-no">${newLine}</span><span class="sign">${sign}</span><code>${escapeHtml(operation.text)}</code></div>`;
-    }).join("");
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';"><meta name="viewport" content="width=device-width, initial-scale=1"><style nonce="${nonce}">
-      :root { color-scheme: light dark; }
-      * { box-sizing: border-box; }
-      body { margin: 0; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); }
-      header { position: sticky; top: 0; z-index: 2; padding: 12px 16px 0; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); }
-      h1 { margin: 0 0 4px; font-size: 14px; }
-      .status { margin-bottom: 10px; color: var(--vscode-descriptionForeground); font-size: 12px; }
-      .tabs { display: flex; gap: 18px; }
-      .tab { appearance: none; border: 0; border-bottom: 2px solid transparent; padding: 7px 1px; color: var(--vscode-descriptionForeground); background: transparent; cursor: pointer; font: inherit; }
-      .tab.active { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
-      main { min-width: 0; }
-      .pane { display: none; }
-      .pane.active { display: block; }
-      .result { margin: 0; padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--vscode-editor-font-size); line-height: 1.55; font-family: var(--vscode-editor-font-family); }
-      .changes { padding: 10px 0 24px; font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); }
-      .change-row { display: grid; grid-template-columns: 42px 42px 20px minmax(0, 1fr); min-height: 22px; line-height: 1.5; padding-right: 14px; }
-      .change-row code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-      .line-no { padding-right: 8px; text-align: right; color: var(--vscode-editorLineNumber-foreground); user-select: none; }
-      .sign { text-align: center; user-select: none; }
-      .change-row.delete { background: var(--vscode-diffEditor-removedTextBackground); }
-      .change-row.add { background: var(--vscode-diffEditor-insertedTextBackground); }
-    </style></head><body><header><h1>${escapeHtml(path.basename(preview.file))}</h1><div class="status">Candidate ready · Original unchanged</div><div class="tabs"><button class="tab active" data-tab="result">Result</button><button class="tab" data-tab="changes">Changes</button></div></header><main><section class="pane active" data-pane="result"><pre class="result">${result}</pre></section><section class="pane" data-pane="changes"><div class="changes">${changes}</div></section></main><script nonce="${nonce}">document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => { document.querySelectorAll('.tab').forEach(item => item.classList.toggle('active', item === button)); document.querySelectorAll('.pane').forEach(item => item.classList.toggle('active', item.dataset.pane === button.dataset.tab)); }));</script></body></html>`;
-  }
-
-  documentReviewWaitingHtml(webview, context) {
-    const nonce = id();
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';"><style nonce="${nonce}">body{margin:0;padding:24px;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);font-family:var(--vscode-font-family)}h1{font-size:14px;margin:0 0 8px}p{color:var(--vscode-descriptionForeground);font-size:12px}</style></head><body><h1>${escapeHtml(path.basename(context.file))}</h1><p>Generating a revised candidate. The original document remains unchanged.</p></body></html>`;
-  }
-
-  async closeDocumentReview({ restoreSessionId } = {}) {
-    const panel = this._documentReviewPanel;
-    if (!panel) {
-      this._documentReviewContext = undefined;
-      return true;
-    }
-    const group = vscode.window.tabGroups.all.find(item => item.tabs.some(tab => this.isReviewTab(tab)));
-    const closeDedicatedGroup = Boolean(group && group.tabs.length === 1);
-    try {
-      if (closeDedicatedGroup) {
-        panel.reveal(group.viewColumn, false);
-        await vscode.commands.executeCommand("workbench.action.closeEditorsAndGroup");
-      } else {
-        panel.dispose();
+      const visibleRanges = [...deletedRanges, ...addedRanges].sort((left, right) => left.start.compareTo(right.start));
+      if (visibleRanges.length) {
+        const reveal = new vscode.Range(visibleRanges[0].start, visibleRanges[visibleRanges.length - 1].end);
+        editor.revealRange(reveal, vscode.TextEditorRevealType.InCenter);
       }
-    } catch {
-      try { panel.dispose(); } catch { /* already closed */ }
+    } catch (error) {
+      this.diffPreviewDocuments.delete(preview.previewUri);
+      throw error;
     }
-    this._documentReviewPanel = undefined;
-    this._documentReviewContext = undefined;
-    const agentPanel = [...this.panels].find(item => item.sessionId === restoreSessionId && item.viewColumn !== undefined);
-    if (agentPanel) agentPanel.reveal(agentPanel.viewColumn, false);
     return true;
   }
 
@@ -2625,44 +2516,14 @@ class HermesSidebarProvider {
     if (!pending || pending.uiSessionId !== sessionId || (requestId && pending.request.id !== requestId)) return false;
     const preview = this._diffPreview;
     if (!preview) return false;
-    if (preview.previewKind === "new-file") return this.openNewFilePreview(preview);
-    if (preview.previewKind === "full-review") return this.openDocumentReview(preview, pending);
-    if (preview.previewKind === "inline-diff") return this.openInlineDiffPreview(preview);
-    return false;
+    return preview.previewKind === "isolated-diff" ? this.openIsolatedDiffPreview(preview) : false;
   }
 
-  async rollbackDocDiffPreview({ preserveReviewPanel = false } = {}) {
+  async rollbackDocDiffPreview() {
     const preview = this._diffPreview;
-    if (!preview) {
-      if (!preserveReviewPanel && this._documentReviewPanel) {
-        await this.closeDocumentReview({ restoreSessionId: this._documentReviewContext?.uiSessionId });
-      }
-      return true;
-    }
-    if (preview.previewKind === "inline-diff") {
-      const uri = vscode.Uri.parse(preview.uri);
-      const document = vscode.workspace.textDocuments.find(item => item.uri.toString() === preview.uri);
-      if (!document) return false;
-      if (document.version !== preview.documentVersion || document.getText() !== preview.previewText) return false;
-      const diskText = await this.readFileTextIfExists(uri);
-      const diskIsExpected = diskText === preview.diskTextBefore
-        || diskText === preview.sourceText
-        || diskText === preview.previewText;
-      if (!diskIsExpected) return false;
-      if (preview.insertText) {
-        const removal = locatePreviewForRemoval(document.getText(), preview);
-        if (!removal) return false;
-        const edit = new vscode.WorkspaceEdit();
-        edit.delete(uri, new vscode.Range(document.positionAt(removal.start), document.positionAt(removal.end)));
-        if (!await vscode.workspace.applyEdit(edit)) return false;
-      }
-      if (document.getText() !== preview.sourceText) return false;
-      if (diskText === preview.previewText || (!preview.wasDirtyBefore && document.isDirty && diskText === preview.sourceText)) {
-        if (!await document.save()) return false;
-      }
-      this._diffPreview = undefined;
-      return true;
-    }
+    if (!preview) return true;
+    this._diffPreview = undefined;
+    this.disposeDocDiffUi();
     const previewUri = preview.previewUri;
     if (previewUri) {
       const tab = vscode.window.tabGroups.all
@@ -2671,31 +2532,27 @@ class HermesSidebarProvider {
       if (tab) {
         try {
           const closed = await vscode.window.tabGroups.close(tab, true);
-          if (!closed) return false;
+          if (!closed) throw new Error("VS Code did not close the temporary Diff tab");
         } catch {
-          return false;
+          setTimeout(() => {
+            const retry = vscode.window.tabGroups.all
+              .flatMap(group => group.tabs)
+              .find(item => this.tabUri(item)?.toString() === previewUri);
+            if (retry) vscode.window.tabGroups.close(retry, true).then(() => {}, () => {});
+          }, 0);
         }
       }
       this.diffPreviewDocuments.delete(previewUri);
     }
-    if (preview.previewKind === "full-review") {
-      if (preserveReviewPanel && this._documentReviewPanel && this._documentReviewContext) {
-        this._documentReviewPanel.webview.html = this.documentReviewWaitingHtml(
-          this._documentReviewPanel.webview,
-          this._documentReviewContext
-        );
-      } else {
-        await this.closeDocumentReview({ restoreSessionId: preview.uiSessionId });
-      }
-    }
-    this._diffPreview = undefined;
+    const agentPanel = [...this.panels].find(item => item.sessionId === preview.uiSessionId && item.viewColumn !== undefined);
+    if (agentPanel) agentPanel.reveal(agentPanel.viewColumn, false);
     return true;
   }
 
   async resolveDiffPermission(decision, { abandonUnsafePreview = false, sessionId, requestId, optionId, feedback, systemCancellation = false } = {}) {
     const pending = this.pendingPermission;
-    const normalizedDecision = decision === true ? "once" : decision === false ? "deny" : decision;
-    const feedbackText = normalizedDecision === "feedback" ? String(feedback || "").trim() : "";
+    let normalizedDecision = decision === true ? "once" : decision === false ? "deny" : decision;
+    let feedbackText = normalizedDecision === "feedback" ? String(feedback || "").trim() : "";
     if (normalizedDecision === "feedback" && !feedbackText) return false;
     const options = pending?.request.params?.options || [];
     const selectedOption = normalizedDecision === "option"
@@ -2703,14 +2560,7 @@ class HermesSidebarProvider {
       : undefined;
     const selectedKind = String(selectedOption?.kind || "").toLowerCase();
     const selectedReject = selectedKind.startsWith("reject") || String(optionId || "").startsWith("deny");
-    const accept = normalizedDecision === "once" || normalizedDecision === "session" || Boolean(selectedOption && !selectedReject);
-    const hardDenial = Boolean(
-      pending
-      && !systemCancellation
-      && normalizedDecision !== "feedback"
-      && pending.intent !== "question"
-      && !accept
-    );
+    let accept = normalizedDecision === "once" || normalizedDecision === "session" || Boolean(selectedOption && !selectedReject);
     if (sessionId && pending?.uiSessionId !== sessionId) return false;
     if (requestId && pending?.request.id !== requestId) return false;
     if (pending?.resolving) return false;
@@ -2725,23 +2575,39 @@ class HermesSidebarProvider {
     const resolvedPreview = this._diffPreview;
     if (accept && resolvedPreview) {
       const preview = resolvedPreview;
-      if (!await this.diffSourceMatches(preview)) {
-        vscode.window.showErrorMessage("The document changed during Diff preview. Keep your edits and generate the Diff again.");
-        this.post({ type: "permissionResolveFailed" }, pending.uiSessionId);
-        pending.resolving = false;
-        return false;
+      let sourceMatches = false;
+      try {
+        sourceMatches = await this.diffSourceMatches(preview);
+      } catch {
+        sourceMatches = false;
+      }
+      if (!sourceMatches) {
+        pending.previewDiverged = true;
+        normalizedDecision = "feedback";
+        feedbackText = SOURCE_DIVERGENCE_FEEDBACK;
+        accept = false;
+        vscode.window.showWarningMessage("The source document changed. The Hermes update was not applied.");
       }
     }
-    const preserveReviewPanel = normalizedDecision === "feedback" && resolvedPreview?.previewKind === "full-review";
-    const cleaned = await this.rollbackDocDiffPreview({ preserveReviewPanel });
+    const hardDenial = Boolean(
+      pending
+      && !systemCancellation
+      && normalizedDecision !== "feedback"
+      && pending.intent !== "question"
+      && !accept
+    );
+    const cleaned = await this.rollbackDocDiffPreview();
     if (!cleaned) {
-      if (!abandonUnsafePreview) {
+      const canPreserveAndAbandon = abandonUnsafePreview || pending?.previewDiverged || !accept || systemCancellation;
+      if (!canPreserveAndAbandon) {
         vscode.window.showErrorMessage("The Diff preview changed and could not be removed safely. Review the document before continuing.");
         this.post({ type: "permissionResolveFailed" }, pending?.uiSessionId);
         if (pending) pending.resolving = false;
         return false;
       }
-      vscode.window.showWarningMessage("The read-only Diff preview could not be closed while Hermes stopped.");
+      if (!systemCancellation && !abandonUnsafePreview) {
+        vscode.window.showWarningMessage("Your document edits were kept and the Hermes change was cancelled.");
+      }
       this._diffPreview = undefined;
     }
     this.disposeDocDiffUi();
@@ -2819,7 +2685,7 @@ class HermesSidebarProvider {
     }
     this.post({ type: "permissionResolved", accepted: accept, hardDenial, discardedPrompts }, pending?.uiSessionId);
     this.presentNextPermission();
-    if (accept && resolvedPreview?.previewKind === "new-file") {
+    if (accept && resolvedPreview?.sourceKind === "missing") {
       this.openAppliedNewFile(resolvedPreview).catch(error => {
         vscode.window.showWarningMessage(`The file was approved but could not be opened: ${error.message}`);
       });
@@ -2889,7 +2755,8 @@ class HermesSidebarProvider {
       this.permissionQueue = [];
       if (this._diffPreviewPromise) await this._diffPreviewPromise;
       const cleaned = await this.rollbackDocDiffPreview();
-      if (cleaned) this.disposeDocDiffUi();
+      if (!cleaned) this._diffPreview = undefined;
+      this.disposeDocDiffUi();
       this.diffPreviewDocuments.clear();
       this._diffPreviewPromise = undefined;
       await Promise.all([...this.cliTurns.values()].map(turn => this.terminateProcess(turn.child)));
@@ -3164,6 +3031,9 @@ class HermesSidebarProvider {
       settings: {
         mode: sessionSettings.mode || config.get("defaultMode", "Auto"),
         model: selectedModel,
+        reasoningByModel: sessionSettings.reasoningByModel || {},
+        reasoningEffortSupported: Boolean(session.reasoningEffortSupported),
+        modelRefreshStatus: session.modelRefreshStatus || "idle",
         skills: merged,
         commands
       },
@@ -3208,6 +3078,7 @@ class HermesSidebarProvider {
   html(webview) {
     const nonce = id();
     const markdownUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "markdown.js"));
+    const modelPickerUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "model-picker.js"));
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "main.js"));
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "styles.css"));
     const iconUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "resources", "nous-girl.png"));
@@ -3223,6 +3094,7 @@ class HermesSidebarProvider {
 <body data-icon="${iconUri}">
   <div id="app"></div>
   <script nonce="${nonce}" src="${markdownUri}"></script>
+  <script nonce="${nonce}" src="${modelPickerUri}"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
@@ -3240,20 +3112,12 @@ function toAttachment(uri, type) {
   };
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 function createSession(title) {
   const now = Date.now();
   return {
     id: id(),
     title,
+    titleOrigin: "automatic",
     createdAt: now,
     updatedAt: now,
     settings: {},
@@ -3327,10 +3191,11 @@ function buildInvocationArgs(args, prompt) {
 }
 
 function composeHermesPrompt(prompt, userMessage) {
-  if (userMessage.command) {
-    return `${userMessage.command}${prompt ? ` ${prompt}` : ""}`;
-  }
   const parts = [];
+  // Put the user's words first so older Hermes title heuristics do not treat
+  // command or context metadata as the conversation subject.
+  parts.push(`User request:\n${prompt || "(No text prompt. Use the provided context.)"}`);
+  if (userMessage.command) parts.push(`Command:\n${userMessage.command}`);
   if (userMessage.skill) {
     parts.push(`Skill: ${userMessage.skill}`);
   }
@@ -3350,7 +3215,6 @@ function composeHermesPrompt(prompt, userMessage) {
   if (contextLines.length) {
     parts.push(`Context:\n${contextLines.join("\n")}`);
   }
-  parts.push(`User request:\n${prompt || "(No text prompt. Use the provided context.)"}`);
   return parts.join("\n\n");
 }
 

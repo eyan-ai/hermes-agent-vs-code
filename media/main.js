@@ -19,6 +19,13 @@ const state = {
   titleDraft: "",
   renamingSessionId: null,
   settingsOpen: false,
+  modelPickerOpen: false,
+  modelQuery: "",
+  modelFilterActive: false,
+  modelFocusIndex: -1,
+  modelPlacement: null,
+  effortPickerOpen: false,
+  effortFocusIndex: 0,
   contextOpen: false,
   commandOpen: false,
   running: false,
@@ -44,10 +51,26 @@ const state = {
   settings: {
     mode: "Auto",
     model: "",
+    reasoningByModel: {},
+    reasoningEffortSupported: false,
+    modelRefreshStatus: "idle",
     skills: [],
     commands: []
   }
 };
+
+const reasoningEfforts = [
+  { label: "Low", value: "low" },
+  { label: "Medium", value: "medium" },
+  { label: "High", value: "high" },
+  { label: "Extra High", value: "xhigh" },
+  { label: "Max", value: "max" },
+  { label: "Ultra", value: "ultra" }
+];
+
+function reasoningLabel(value) {
+  return reasoningEfforts.find(option => option.value === value)?.label || "Default";
+}
 
 const icons = {
   history: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>',
@@ -203,6 +226,31 @@ function cancelRename(id) {
   state.renamingSessionId = null;
 }
 
+function captureRenameFocus() {
+  const input = document.activeElement;
+  if (!input || (input.id !== "titleInput" && !input.classList?.contains("history-rename"))) return null;
+  return {
+    kind: input.id === "titleInput" ? "title" : "history",
+    sessionId: input.closest(".history-item")?.dataset.session || "",
+    start: input.selectionStart,
+    end: input.selectionEnd
+  };
+}
+
+function restoreRenameFocus(snapshot) {
+  if (!snapshot) return;
+  requestAnimationFrame(() => {
+    const input = snapshot.kind === "title"
+      ? document.querySelector("#titleInput")
+      : document.querySelector(`.history-item[data-session="${snapshot.sessionId}"] .history-rename`);
+    if (!input) return;
+    input.focus();
+    if (Number.isInteger(snapshot.start) && Number.isInteger(snapshot.end)) {
+      input.setSelectionRange(snapshot.start, snapshot.end);
+    }
+  });
+}
+
 function estimateTitleCaretIndex(event, text) {
   const textEl = document.querySelector("#titleBtn .title-text");
   if (!textEl) return String(text || "").length;
@@ -313,6 +361,15 @@ function displayTitle(session) {
     return text.length > 40 ? `${text.slice(0, 40)}…` : text;
   }
   return "Untitled";
+}
+
+function manualTitleMarker(session) {
+  if (session?.titleOrigin !== "manual") return "";
+  return `<span class="title-origin-marker" title="Manually edited in VS Code" aria-label="Manually edited in VS Code">edited</span>`;
+}
+
+function renderedTitle(session) {
+  return `${manualTitleMarker(session)}<span class="title-value">${h(displayTitle(session))}</span>`;
 }
 
 function ageLabel(session) {
@@ -458,7 +515,7 @@ function render({ forceSubmissionBottom = false } = {}) {
     <div class="app">
       <header class="topbar">
         <button class="title-btn ${state.titleEditing ? "editing" : ""}" id="titleBtn" type="button">
-          <span class="title-text">${h(displayTitle(session))}</span>
+          <span class="title-text">${renderedTitle(session)}</span>
           <span class="title-edit">${icons.edit}</span>
           <input class="title-input" id="titleInput" maxlength="64" value="${h(state.titleEditing ? state.titleDraft : (displayTitle(session)))}">
         </button>
@@ -476,6 +533,8 @@ function render({ forceSubmissionBottom = false } = {}) {
         ${renderComposer(running)}
       </section>
   </div>`;
+  positionSettingsPopover();
+  renderModelOverlay();
   bind();
   const accessoryEl = document.querySelector("#composerAccessories");
   if (accessoryEl) accessoryEl._renderKey = accessoryRenderKey();
@@ -496,7 +555,7 @@ function renderLiveRegions({ forceSubmissionBottom = false } = {}) {
   reconcileConversationRegion(scrollEl, messages);
   refreshAccessoryRegion(accessoryEl);
   const titleText = document.querySelector("#titleBtn .title-text");
-  if (titleText) titleText.textContent = displayTitle(session);
+  if (titleText) titleText.innerHTML = renderedTitle(session);
   bindConversationRegion();
   updateSend();
   finishRenderedRegions(prevScrollTop, { forceSubmissionBottom });
@@ -548,6 +607,7 @@ function bindScrollWatch() {
     updateJumpToLatest();
   }, { capture: true, passive: true });
   document.addEventListener("scroll", event => {
+    if (state.modelPickerOpen || state.effortPickerOpen) positionOpenPicker();
     const el = event.target;
     if (!el || !el.classList || !el.classList.contains("scroll")) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
@@ -603,8 +663,11 @@ function watchComposerSize() {
 }
 // Window/webview resize changes the composer size too — keep padding in sync.
 window.addEventListener("resize", () => {
+  window.scrollTo(0, 0);
+  positionSettingsPopover();
   const el = document.querySelector(".scroll");
   syncScrollPadding(el);
+  if (state.modelPickerOpen || state.effortPickerOpen) positionOpenPicker();
   if (el && state.running && el.scrollHeight - el.scrollTop - el.clientHeight < 96) {
     el.scrollTop = el.scrollHeight;
   }
@@ -660,7 +723,7 @@ function renderHistoryItems() {
     return `<div class="history-item ${session.id === state.activeSessionId ? "active" : ""} ${renaming ? "renaming" : ""}" data-session="${session.id}">
       ${renaming
         ? `<input class="history-rename" maxlength="64" value="${h(title)}">`
-        : `<span class="history-name">${h(displayTitle(active || session))}</span>`}
+        : `<span class="history-name">${manualTitleMarker(active || session)}<span class="history-name-text">${h(displayTitle(active || session))}</span></span>`}
       <span class="history-age">${ageLabel(session)}</span>
       <span class="history-actions">
         ${renaming ? "" : `<button class="history-action rename-history" type="button">${icons.edit}</button>`}
@@ -909,6 +972,10 @@ function glyphFor(type) {
 }
 
 function renderPopovers() {
+  const selectedModel = state.models.find(model => model.id === state.settings.model);
+  const refreshStatus = state.settings.modelRefreshStatus || "idle";
+  const refreshLabel = refreshStatus === "refreshing" ? "Refreshing…" : "Refresh models";
+  const refreshFeedback = refreshStatus === "refreshed" ? "Refreshed" : refreshStatus === "failed" ? "Failed" : "";
   return `<div class="popover ${state.contextOpen ? "open" : ""}" id="contextPopover">
       <div class="popover-head"><span>Add workspace context</span></div>
       <div class="option-list">${state.workspaceItems.length ? state.workspaceItems.map(item => `<button class="option" type="button" data-path="${h(item.path)}" title="${h(item.path)}">${item.type === "folder" ? icons.folder : icons.file}<span class="option-name">${h(item.name)}</span></button>`).join("") : `<div class="option-empty">No files found</div>`}</div>
@@ -920,24 +987,178 @@ function renderPopovers() {
     <div class="popover ${state.settingsOpen ? "open" : ""}" id="modePopover">
       <div class="popover-head"><span>Run settings</span></div>
       <div class="mode-panel">
-        <div class="settings-row modes-title"><span>Mode</span><span class="settings-value">${h(state.settings.mode)}</span></div>
-        <div class="mode-picker">
-          ${["Manual", "Auto"].map(mode => `<button class="approval-option ${state.settings.mode === mode ? "active" : ""}" data-mode="${mode}" type="button">
-            <span>${mode === "Manual" ? "✋" : "⚡"}</span>
-            <span><strong>${mode}</strong><span>${mode === "Manual" ? "Always ask for approval before making each edit." : "Only ask for approval when actions detected as potentially unsafe."}</span></span>
-            <span>${state.settings.mode === mode ? "✓" : ""}</span>
-          </button>`).join("")}
+        <div class="mode-panel-content">
+          <div class="settings-row modes-title"><span>Mode</span><span class="settings-value">${h(state.settings.mode)}</span></div>
+          <div class="mode-picker">
+            ${["Manual", "Auto"].map(mode => `<button class="approval-option ${state.settings.mode === mode ? "active" : ""}" data-mode="${mode}" type="button">
+              <span>${mode === "Manual" ? "✋" : "⚡"}</span>
+              <span><strong>${mode}</strong><span>${mode === "Manual" ? "Always ask for approval before making each edit." : "Only ask for approval when actions detected as potentially unsafe."}</span></span>
+              <span>${state.settings.mode === mode ? "✓" : ""}</span>
+            </button>`).join("")}
+          </div>
+          <div class="model-field">
+            <span class="model-label">Model</span>
+            <div class="model-combobox ${state.modelPickerOpen ? "open" : ""}">
+              <span class="model-combobox-copy">
+                <input id="modelPickerInput" role="combobox" aria-autocomplete="list" aria-controls="modelList" aria-expanded="${state.modelPickerOpen}" autocomplete="off" spellcheck="false" value="${h(state.modelPickerOpen ? state.modelQuery : (selectedModel?.name || "Current Hermes model"))}" ${state.models.length ? "" : "disabled"}>
+                <small id="modelPickerDescription">${h(selectedModel?.description || "")}</small>
+              </span>
+              ${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}
+            </div>
+          </div>
+          ${state.settings.reasoningEffortSupported ? `<div class="effort-field">
+            <span class="model-label">Effort</span>
+            <button class="model-picker-button" id="effortPickerButton" type="button" aria-haspopup="listbox" aria-expanded="${state.effortPickerOpen}">
+              <span><strong>${h(reasoningLabel(state.settings.reasoningByModel?.[state.settings.model]))}</strong><small>Reasoning effort for this model</small></span>
+              ${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}
+            </button>
+          </div>` : ""}
         </div>
-        <div class="model-field">
-          <label for="modelSelect">Model</label>
-          <select class="model-select" id="modelSelect" ${state.models.length ? "" : "disabled"}>
-            ${state.models.length
-              ? state.models.map(model => `<option value="${h(model.id)}" title="${h(model.description || model.name)}" ${state.settings.model === model.id ? "selected" : ""}>${h(model.name || model.id)}</option>`).join("")
-              : `<option value="">Current Hermes model</option>`}
-          </select>
+        <div class="model-refresh-row">
+          <button class="model-refresh" id="refreshModels" type="button" ${refreshStatus === "refreshing" ? "disabled" : ""}>${refreshLabel}</button>
+          ${refreshFeedback ? `<span class="model-refresh-status ${refreshStatus}">${refreshFeedback}</span>` : ""}
         </div>
       </div>
     </div>`;
+}
+
+function ensureSettingsOverlayRoot() {
+  let root = document.querySelector("#settingsOverlayRoot");
+  if (root) return root;
+  root = document.createElement("div");
+  root.id = "settingsOverlayRoot";
+  document.body.appendChild(root);
+  return root;
+}
+
+function filteredModelOptions() {
+  return state.modelFilterActive
+    ? HermesModelPicker.filterModels(state.models, state.modelQuery)
+    : state.models.slice();
+}
+
+function renderModelOverlay() {
+  const root = ensureSettingsOverlayRoot();
+  const models = filteredModelOptions();
+  const modelList = state.modelPickerOpen ? `<div class="model-list open" id="modelList" role="listbox" aria-label="Hermes model">
+    ${models.length ? models.map((model, index) => {
+      const selected = state.settings.model === model.id;
+      return `<div class="model-option ${selected ? "selected" : ""} ${index === state.modelFocusIndex ? "focused" : ""} ${model.unavailable ? "unavailable" : ""}" id="modelOption-${index}" role="option" aria-selected="${selected}" aria-disabled="${Boolean(model.unavailable)}" tabindex="-1" data-model-index="${index}" data-model-id="${h(model.id)}">
+        <button class="model-option-main" type="button" data-model-id="${h(model.id)}" ${model.unavailable ? "disabled" : ""}>
+          <span class="model-option-copy"><strong>${h(model.name || model.id)}</strong><small>${h(model.description || "")}</small></span>
+          <span class="model-option-meta">${model.unavailable ? "Unavailable" : selected ? "✓" : ""}</span>
+        </button>
+      </div>`;
+    }).join("") : `<div class="model-no-match" role="option" aria-disabled="true">No matching models</div>`}
+  </div>` : "";
+  const effortList = state.effortPickerOpen && state.settings.reasoningEffortSupported ? `<div class="effort-list open" id="effortList" role="listbox" aria-label="Reasoning effort">
+    ${reasoningEfforts.map((option, index) => {
+      const selected = state.settings.reasoningByModel?.[state.settings.model] === option.value;
+      return `<button class="effort-option ${selected ? "active" : ""}" type="button" role="option" aria-selected="${selected}" tabindex="${index === state.effortFocusIndex ? "0" : "-1"}" data-effort-index="${index}" data-effort="${option.value}"><span>${option.label}</span><span>${selected ? "✓" : ""}</span></button>`;
+    }).join("")}
+  </div>` : "";
+  root.innerHTML = modelList + effortList;
+  const input = document.querySelector("#modelPickerInput");
+  if (input) {
+    input.setAttribute("aria-activedescendant", state.modelPickerOpen && state.modelFocusIndex >= 0 ? `modelOption-${state.modelFocusIndex}` : "");
+  }
+  bindSettingsOverlay();
+  if (modelList || effortList) {
+    positionOpenPicker();
+    requestAnimationFrame(positionOpenPicker);
+  }
+}
+
+function bindSettingsOverlay() {
+  document.querySelectorAll(".model-option-main").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      selectModel(button.dataset.modelId);
+    });
+  });
+  document.querySelectorAll(".model-option").forEach(option => {
+    option.addEventListener("focus", () => { state.modelFocusIndex = Number(option.dataset.modelIndex); });
+  });
+  document.querySelectorAll(".effort-option").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      selectReasoningEffort(state.settings.model, button.dataset.effort);
+    });
+    button.addEventListener("focus", () => { state.effortFocusIndex = Number(button.dataset.effortIndex); });
+    button.addEventListener("keydown", event => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        state.effortFocusIndex = (state.effortFocusIndex + direction + reasoningEfforts.length) % reasoningEfforts.length;
+        renderModelOverlay();
+        focusEffortOption();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectReasoningEffort(state.settings.model, button.dataset.effort);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        state.effortPickerOpen = false;
+        renderModelOverlay();
+        document.querySelector("#effortPickerButton")?.focus();
+      }
+    });
+  });
+}
+
+function positionSettingsPopover() {
+  const popover = document.querySelector("#modePopover.open");
+  if (!popover) return;
+  popover.style.transform = "";
+  const rect = popover.getBoundingClientRect();
+  const margin = 8;
+  const shift = rect.top < margin
+    ? margin - rect.top
+    : rect.bottom > window.innerHeight - margin
+      ? window.innerHeight - margin - rect.bottom
+      : 0;
+  if (shift) popover.style.transform = `translateY(${shift}px)`;
+}
+
+function positionOpenPicker() {
+  positionSettingsPopover();
+  const list = state.modelPickerOpen
+    ? document.querySelector("#modelList")
+    : state.effortPickerOpen ? document.querySelector("#effortList") : null;
+  const trigger = state.modelPickerOpen
+    ? document.querySelector(".model-combobox")
+    : state.effortPickerOpen ? document.querySelector("#effortPickerButton") : null;
+  if (!list || !trigger || !state.settingsOpen) return;
+  const triggerRect = trigger.getBoundingClientRect();
+  if (triggerRect.bottom <= 0 || triggerRect.top >= window.innerHeight) {
+    const scrollContainer = trigger.closest(".mode-panel-content");
+    if (scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect();
+      if (triggerRect.bottom <= containerRect.top) {
+        scrollContainer.scrollTop -= containerRect.top - triggerRect.top;
+      } else if (triggerRect.top >= containerRect.bottom) {
+        scrollContainer.scrollTop += triggerRect.bottom - containerRect.bottom;
+      }
+    }
+    requestAnimationFrame(positionOpenPicker);
+    return;
+  }
+  const placement = HermesModelPicker.calculateOverlayPlacement({
+    triggerRect,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+    contentHeight: list.scrollHeight,
+    maxListHeight: 250,
+    margin: 8
+  });
+  state.modelPlacement = placement;
+  list.classList.toggle("opens-up", placement.direction === "up");
+  list.classList.toggle("opens-down", placement.direction === "down");
+  list.style.top = `${placement.top}px`;
+  list.style.left = `${placement.left}px`;
+  list.style.width = `${placement.width}px`;
+  list.style.maxHeight = `${placement.maxHeight}px`;
 }
 
 function renderDiff(diff) {
@@ -1113,10 +1334,10 @@ function renderPermissionInside() {
     <div class="permission-head">${icons.bolt}<strong>${h(p.question || p.title || "Allow this action?")}</strong></div>
     ${p.diff ? renderDiff(p.diff) : ""}
     ${p.previewAction ? `<button class="permission-preview" id="permissionPreview" type="button" ${state.permissionResolving ? "disabled" : ""}>${h(p.previewAction)}</button>` : ""}
-    <div class="permission-actions">
-      ${choices.map(choice => `<button class="permission-btn permission-choice ${choice.danger ? "permission-deny" : ""}" data-decision="${h(choice.decision)}" data-option-id="${h(choice.optionId || "")}" type="button" ${state.permissionResolving ? "disabled" : ""}>${h(choice.label)}</button>`).join("")}
-    </div>
-    ${p.allowFeedback === false ? "" : `<textarea class="permission-feedback" id="permissionFeedback" rows="1" placeholder="Tell Hermes what to do instead" ${state.permissionResolving ? "disabled" : ""}>${h(state.permissionDraft)}</textarea>`}
+    ${p.previewDiverged
+      ? `<div class="permission-actions"><button class="permission-btn permission-deny" id="abandonDiffPreview" type="button" ${state.permissionResolving ? "disabled" : ""}>Keep my edits and cancel this change</button></div>`
+      : `<div class="permission-actions">${choices.map(choice => `<button class="permission-btn permission-choice ${choice.danger ? "permission-deny" : ""}" data-decision="${h(choice.decision)}" data-option-id="${h(choice.optionId || "")}" type="button" ${state.permissionResolving ? "disabled" : ""}>${h(choice.label)}</button>`).join("")}</div>
+        ${p.allowFeedback === false ? "" : `<textarea class="permission-feedback" id="permissionFeedback" rows="1" placeholder="Tell Hermes what to do instead" ${state.permissionResolving ? "disabled" : ""}>${h(state.permissionDraft)}</textarea>`}`}
   </div>`;
 }
 
@@ -1366,6 +1587,8 @@ function bind() {
   document.querySelector("#pickBtn")?.addEventListener("click", () => vscode.postMessage({ type: "pickLocal" }));
   document.querySelector("#modeBtn")?.addEventListener("click", () => {
     state.settingsOpen = !state.settingsOpen;
+    closeModelPicker();
+    state.effortPickerOpen = false;
     state.contextOpen = false;
     state.commandOpen = false;
     render();
@@ -1400,9 +1623,60 @@ function bind() {
       render();
     });
   });
-  document.querySelector("#modelSelect")?.addEventListener("change", event => {
-    state.settings.model = event.target.value;
-    settingsChanged();
+  const modelInput = document.querySelector("#modelPickerInput");
+  document.querySelector(".model-combobox")?.addEventListener("click", event => {
+    if (event.target.closest("#modelPickerInput") || modelInput?.disabled) return;
+    modelInput?.focus();
+    openModelPicker();
+  });
+  modelInput?.addEventListener("focus", () => openModelPicker());
+  modelInput?.addEventListener("click", event => {
+    event.stopPropagation();
+    openModelPicker();
+  });
+  modelInput?.addEventListener("input", event => {
+    state.modelPickerOpen = true;
+    state.effortPickerOpen = false;
+    state.modelFilterActive = true;
+    state.modelQuery = event.currentTarget.value;
+    const models = filteredModelOptions();
+    state.modelFocusIndex = HermesModelPicker.nextSelectableIndex(models, -1, 1);
+    renderModelOverlay();
+  });
+  modelInput?.addEventListener("keydown", event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!state.modelPickerOpen) openModelPicker();
+      const models = filteredModelOptions();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      state.modelFocusIndex = HermesModelPicker.nextSelectableIndex(models, state.modelFocusIndex, direction);
+      renderModelOverlay();
+      focusModelOption();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const selected = filteredModelOptions()[state.modelFocusIndex];
+      if (selected && !selected.unavailable) selectModel(selected.id);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeModelPicker({ restoreFocus: true });
+    }
+  });
+  document.querySelector("#effortPickerButton")?.addEventListener("click", () => {
+    state.effortPickerOpen = !state.effortPickerOpen;
+    closeModelPicker();
+    const selectedEffort = state.settings.reasoningByModel?.[state.settings.model];
+    const selectedIndex = reasoningEfforts.findIndex(option => option.value === selectedEffort);
+    state.effortFocusIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    render();
+    if (state.effortPickerOpen) focusEffortOption();
+  });
+  document.querySelector("#refreshModels")?.addEventListener("click", () => {
+    if (state.settings.modelRefreshStatus === "refreshing") return;
+    closeModelPicker();
+    state.effortPickerOpen = false;
+    state.settings.modelRefreshStatus = "refreshing";
+    vscode.postMessage({ type: "refreshModels" });
+    render();
   });
   const prompt = document.querySelector("#prompt");
   prompt?.addEventListener("input", () => {
@@ -1529,6 +1803,12 @@ function bind() {
   document.querySelector("#permissionPreview")?.addEventListener("click", () => {
     vscode.postMessage({ type: "reopenPermissionPreview", requestId: state.permission.requestId, sessionId: state.permission.sessionId });
   });
+  document.querySelector("#abandonDiffPreview")?.addEventListener("click", () => {
+    if (state.permissionResolving) return;
+    state.permissionResolving = true;
+    vscode.postMessage({ type: "abandonDiffPreview", requestId: state.permission.requestId, sessionId: state.permission.sessionId });
+    render();
+  });
   const permissionFeedback = document.querySelector("#permissionFeedback");
   permissionFeedback?.addEventListener("input", event => {
     state.permissionDraft = event.target.value;
@@ -1601,6 +1881,13 @@ document.addEventListener("click", event => {
     vscode.postMessage({ type: "openAttachment", attachment: { uri, name: uri.split("/").pop() } });
     return;
   }
+  if (state.modelPickerOpen && !event.target.closest(".model-combobox, #modelList")) {
+    closeModelPicker();
+  }
+  if (state.effortPickerOpen && !event.target.closest("#effortPickerButton, #effortList")) {
+    state.effortPickerOpen = false;
+    renderModelOverlay();
+  }
   let changed = false;
   let accessoriesChanged = false;
   if (!event.target.closest(".history, #historyBtn") && state.historyOpen) {
@@ -1612,10 +1899,12 @@ document.addEventListener("click", event => {
     state.memoryOpen = false;
     changed = true;
   }
-  if (!event.target.closest(".popover, #modeBtn") && (state.contextOpen || state.commandOpen || state.settingsOpen)) {
+  if (!event.target.closest(".popover, #modeBtn, #settingsOverlayRoot") && (state.contextOpen || state.commandOpen || state.settingsOpen)) {
     state.contextOpen = false;
     state.commandOpen = false;
     state.settingsOpen = false;
+    closeModelPicker();
+    state.effortPickerOpen = false;
     changed = true;
   }
   if (!event.target.closest(".todos-wrap") && state.todosOpen) {
@@ -1629,8 +1918,89 @@ document.addEventListener("click", event => {
   else if (accessoriesChanged) renderAccessoriesOnly();
 });
 
-function settingsChanged() {
-  vscode.postMessage({ type: "settingsChanged", settings: { mode: state.settings.mode, model: state.settings.model } });
+function focusModelOption() {
+  document.querySelector(`.model-option[data-model-index="${state.modelFocusIndex}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function focusEffortOption() {
+  document.querySelector(`.effort-option[data-effort-index="${state.effortFocusIndex}"]`)?.focus();
+}
+
+function openModelPicker() {
+  if (!state.settingsOpen || !state.models.length) return;
+  if (state.modelPickerOpen) return;
+  const selected = state.models.find(model => model.id === state.settings.model);
+  state.modelPickerOpen = true;
+  state.effortPickerOpen = false;
+  state.modelFilterActive = false;
+  state.modelQuery = selected?.name || selected?.id || "";
+  const selectedIndex = state.models.findIndex(model => model.id === state.settings.model && !model.unavailable);
+  state.modelFocusIndex = selectedIndex >= 0
+    ? selectedIndex
+    : HermesModelPicker.nextSelectableIndex(state.models, -1, 1);
+  const input = document.querySelector("#modelPickerInput");
+  if (input) {
+    input.value = state.modelQuery;
+    input.setAttribute("aria-expanded", "true");
+    input.setAttribute("aria-activedescendant", state.modelFocusIndex >= 0 ? `modelOption-${state.modelFocusIndex}` : "");
+  }
+  renderModelOverlay();
+  requestAnimationFrame(() => {
+    const current = document.querySelector("#modelPickerInput");
+    current?.focus();
+    current?.select();
+  });
+}
+
+function closeModelPicker({ restoreFocus = false } = {}) {
+  state.modelPickerOpen = false;
+  state.modelFilterActive = false;
+  state.modelQuery = "";
+  state.modelFocusIndex = -1;
+  state.modelPlacement = null;
+  const selected = state.models.find(model => model.id === state.settings.model);
+  const input = document.querySelector("#modelPickerInput");
+  if (input) {
+    input.value = selected?.name || selected?.id || "Current Hermes model";
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+  }
+  const description = document.querySelector("#modelPickerDescription");
+  if (description) description.textContent = selected?.description || "";
+  renderModelOverlay();
+  if (restoreFocus) document.querySelector("#modelPickerInput")?.focus();
+}
+
+function selectModel(modelId) {
+  const selected = state.models.find(model => model.id === modelId);
+  if (!selected || selected.unavailable) return;
+  state.settings.model = modelId;
+  state.modelPickerOpen = false;
+  state.modelFilterActive = false;
+  state.modelQuery = "";
+  state.modelFocusIndex = -1;
+  state.modelPlacement = null;
+  state.effortPickerOpen = false;
+  settingsChanged();
+  render();
+}
+
+function selectReasoningEffort(modelId, effort) {
+  if (!state.settings.reasoningEffortSupported) return;
+  const selected = state.models.find(model => model.id === modelId);
+  if (!selected || selected.unavailable || !reasoningEfforts.some(option => option.value === effort)) return;
+  state.settings.model = modelId;
+  state.settings.reasoningByModel = { ...(state.settings.reasoningByModel || {}), [modelId]: effort };
+  state.effortPickerOpen = false;
+  settingsChanged(effort);
+  render();
+}
+
+function settingsChanged(reasoningEffort) {
+  vscode.postMessage({
+    type: "settingsChanged",
+    settings: { mode: state.settings.mode, model: state.settings.model, reasoningEffort }
+  });
 }
 
 function submissionIdentityIds(items) {
@@ -1692,8 +2062,16 @@ function submit() {
 window.addEventListener("message", event => {
   const message = event.data;
   if (message.type === "state") {
+    const renameFocus = captureRenameFocus();
     const previousActiveSessionId = state.activeSessionId;
     const previousPermissionRequestId = state.permission?.requestId;
+    const previousSettingsUi = JSON.stringify({
+      model: state.settings.model,
+      reasoningByModel: state.settings.reasoningByModel,
+      reasoningEffortSupported: state.settings.reasoningEffortSupported,
+      modelRefreshStatus: state.settings.modelRefreshStatus,
+      models: state.models
+    });
     const hadStructuralOverlay = state.historyOpen || state.memoryOpen || state.titleEditing || Boolean(state.renamingSessionId);
     const forceSubmissionBottom = acknowledgePendingSubmissionScroll(
       message.sessions || [],
@@ -1704,12 +2082,20 @@ window.addEventListener("message", event => {
     state.sessions = message.sessions || [];
     state.activeSessionId = message.activeSessionId;
     state.settings = { ...state.settings, ...(message.settings || {}) };
+    if (!state.settings.reasoningEffortSupported) state.effortPickerOpen = false;
     state.queue = message.queue || [];
     if (state.editingQueueId && !state.queue.some(item => item.id === state.editingQueueId)) {
       clearComposerDraft();
       composerReset = true;
     }
     state.models = message.models || [];
+    const settingsUiChanged = previousSettingsUi !== JSON.stringify({
+      model: state.settings.model,
+      reasoningByModel: state.settings.reasoningByModel,
+      reasoningEffortSupported: state.settings.reasoningEffortSupported,
+      modelRefreshStatus: state.settings.modelRefreshStatus,
+      models: state.models
+    });
     state.diagnostics = message.diagnostics || [];
     state.editorContext = message.editorContext;
     state.permission = message.permission || null;
@@ -1723,10 +2109,16 @@ window.addEventListener("message", event => {
       || sessionChanged
       || permissionChanged
       || composerReset
+      || settingsUiChanged
       || hadStructuralOverlay;
     if (needsFullRender) {
-      state.renamingSessionId = null;
+      if (state.renamingSessionId && !state.sessions.some(session => session.id === state.renamingSessionId)) {
+        delete state.renameDrafts[state.renamingSessionId];
+        delete state.renameOriginals[state.renamingSessionId];
+        state.renamingSessionId = null;
+      }
       render({ forceSubmissionBottom });
+      restoreRenameFocus(renameFocus);
     } else {
       renderLiveRegions({ forceSubmissionBottom });
     }
@@ -1784,7 +2176,8 @@ window.addEventListener("message", event => {
       choices: message.choices || [],
       allowFeedback: message.allowFeedback !== false,
       diff: message.diff || null,
-      previewAction: message.previewAction || ""
+      previewAction: message.previewAction || "",
+      previewDiverged: Boolean(message.previewDiverged)
     };
     render();
   }

@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { buildPreviewEdit, changedLineIndices, changedOldRanges, locatePreviewForRemoval } = require("../lib/diff-preview");
+const { buildPreviewEdit, buildInlineDiffDocument, buildInlineDiffPlan, changedLineIndices, changedOldRanges, locatePreviewForRemoval, sourceSnapshotMatches } = require("../lib/diff-preview");
 
 function test(name, fn) {
   try {
@@ -11,6 +11,18 @@ function test(name, fn) {
     console.error(`not ok - ${name}`);
     throw error;
   }
+}
+
+function applyInlinePlan(source, plan) {
+  let result = source;
+  for (const item of [...plan.insertions].sort((a, b) => b.offset - a.offset)) {
+    result = result.slice(0, item.offset) + item.text + result.slice(item.offset);
+  }
+  return result;
+}
+
+function rangeTexts(text, ranges) {
+  return ranges.map(range => text.slice(range.start, range.end));
 }
 
 test("builds a complete multiline preview below the replaced text", () => {
@@ -181,4 +193,190 @@ test("refuses removal when the preview itself was edited", () => {
     + source.slice(preview.insertOffset);
 
   assert.strictEqual(locatePreviewForRemoval(withPreview, preview), null);
+});
+
+test("tight preview insertions interleave replacement lines", () => {
+  const source = "before\nold one\nold two\nafter\n";
+  const preview = buildPreviewEdit(source, "old one\nold two", "new one\nnew two");
+  const insertions = buildInlineDiffPlan(preview, source).insertions;
+  let result = source;
+  for (const item of [...insertions].sort((a, b) => b.offset - a.offset)) {
+    result = result.slice(0, item.offset) + item.text + result.slice(item.offset);
+  }
+  assert.strictEqual(result, "before\nold one\nnew one\nold two\nnew two\nafter\n");
+});
+
+test("tight preview preserves CRLF offsets", () => {
+  const source = "before\r\nold one\r\nold two\r\nafter\r\n";
+  const preview = buildPreviewEdit(source, "old one\r\nold two", "new one\r\nnew two");
+  const insertions = buildInlineDiffPlan(preview, source).insertions;
+  let result = source;
+  for (const item of [...insertions].sort((a, b) => b.offset - a.offset)) {
+    result = result.slice(0, item.offset) + item.text + result.slice(item.offset);
+  }
+  assert.strictEqual(result, "before\r\nold one\r\nnew one\r\nold two\r\nnew two\r\nafter\r\n");
+});
+
+test("inline plan returns final red and green ranges after inserted lines shift source coordinates", () => {
+  const source = "before\nold one\nold two\nafter\n";
+  const preview = buildPreviewEdit(source, "old one\nold two", "new one\nnew two");
+  const plan = buildInlineDiffPlan(preview, source);
+  const result = applyInlinePlan(source, plan);
+
+  assert.deepStrictEqual(rangeTexts(result, plan.deletedRanges), ["old one", "old two"]);
+  assert.deepStrictEqual(rangeTexts(result, plan.addedRanges), ["new one", "new two"]);
+});
+
+test("inline plan keeps separated hunks independent", () => {
+  const source = "start\nold one\nkeep\nold two\nend\n";
+  const preview = buildPreviewEdit(source, source, "start\nnew one\nkeep\nnew two\nend\n");
+  const plan = buildInlineDiffPlan(preview, source);
+  const result = applyInlinePlan(source, plan);
+
+  assert.strictEqual(result, "start\nold one\nnew one\nkeep\nold two\nnew two\nend\n");
+  assert.deepStrictEqual(rangeTexts(result, plan.deletedRanges), ["old one", "old two"]);
+  assert.deepStrictEqual(rangeTexts(result, plan.addedRanges), ["new one", "new two"]);
+});
+
+test("inline plan handles additions and deletions with unequal counts without placeholders", () => {
+  const moreAddedSource = "top\nold\nbottom\n";
+  const moreAddedPreview = buildPreviewEdit(moreAddedSource, "old", "new one\nnew two\nnew three");
+  const moreAddedPlan = buildInlineDiffPlan(moreAddedPreview, moreAddedSource);
+  const moreAddedResult = applyInlinePlan(moreAddedSource, moreAddedPlan);
+  assert.strictEqual(moreAddedResult, "top\nold\nnew one\nnew two\nnew three\nbottom\n");
+  assert.deepStrictEqual(rangeTexts(moreAddedResult, moreAddedPlan.deletedRanges), ["old"]);
+  assert.deepStrictEqual(rangeTexts(moreAddedResult, moreAddedPlan.addedRanges), ["new one\nnew two\nnew three"]);
+
+  const moreDeletedSource = "top\nold one\nold two\nold three\nbottom\n";
+  const moreDeletedPreview = buildPreviewEdit(moreDeletedSource, "old one\nold two\nold three", "new");
+  const moreDeletedPlan = buildInlineDiffPlan(moreDeletedPreview, moreDeletedSource);
+  const moreDeletedResult = applyInlinePlan(moreDeletedSource, moreDeletedPlan);
+  assert.strictEqual(moreDeletedResult, "top\nold one\nnew\nold two\nold three\nbottom\n");
+  assert.deepStrictEqual(rangeTexts(moreDeletedResult, moreDeletedPlan.deletedRanges), ["old one", "old two", "old three"]);
+  assert.deepStrictEqual(rangeTexts(moreDeletedResult, moreDeletedPlan.addedRanges), ["new"]);
+});
+
+test("inline plan distinguishes real blank-line changes from equal blank lines", () => {
+  const source = "header\n\nold\n\nfooter\n";
+  const preview = buildPreviewEdit(source, source, "header\n\nnew\nextra\n\nfooter\n");
+  const plan = buildInlineDiffPlan(preview, source);
+  const result = applyInlinePlan(source, plan);
+
+  assert.strictEqual(result, "header\n\nold\nnew\nextra\n\nfooter\n");
+  assert.deepStrictEqual(rangeTexts(result, plan.deletedRanges), ["old"]);
+  assert.deepStrictEqual(rangeTexts(result, plan.addedRanges), ["new\nextra"]);
+});
+
+test("inline plan supports pure additions, pure deletions, and a missing final newline", () => {
+  const additionSource = "first\nlast";
+  const additionPreview = buildPreviewEdit(additionSource, additionSource, "first\nadded\nlast");
+  const additionPlan = buildInlineDiffPlan(additionPreview, additionSource);
+  const additionResult = applyInlinePlan(additionSource, additionPlan);
+  assert.strictEqual(additionResult, "first\nadded\nlast");
+  assert.deepStrictEqual(additionPlan.deletedRanges, []);
+  assert.deepStrictEqual(rangeTexts(additionResult, additionPlan.addedRanges), ["added"]);
+
+  const deletionSource = "first\nremove\nlast";
+  const deletionPreview = buildPreviewEdit(deletionSource, deletionSource, "first\nlast");
+  const deletionPlan = buildInlineDiffPlan(deletionPreview, deletionSource);
+  const deletionResult = applyInlinePlan(deletionSource, deletionPlan);
+  assert.strictEqual(deletionResult, deletionSource);
+  assert.deepStrictEqual(rangeTexts(deletionResult, deletionPlan.deletedRanges), ["remove"]);
+  assert.deepStrictEqual(deletionPlan.addedRanges, []);
+});
+
+test("inline plan keeps CRLF ranges aligned", () => {
+  const source = "before\r\nold one\r\nold two\r\nafter\r\n";
+  const preview = buildPreviewEdit(source, "old one\r\nold two", "new one\r\nnew two");
+  const plan = buildInlineDiffPlan(preview, source);
+  const result = applyInlinePlan(source, plan);
+
+  assert.deepStrictEqual(rangeTexts(result, plan.deletedRanges), ["old one", "old two"]);
+  assert.deepStrictEqual(rangeTexts(result, plan.addedRanges), ["new one", "new two"]);
+});
+
+test("virtual Diff document preserves tight replacement ordering without mutating inputs", () => {
+  const source = "before\nold one\nold two\nafter\n";
+  const preview = buildPreviewEdit(source, "old one\nold two", "new one\nnew two");
+  const snapshot = JSON.parse(JSON.stringify(preview));
+  const projected = buildInlineDiffDocument(preview, source);
+
+  assert.strictEqual(projected.text, "before\nold one\nnew one\nold two\nnew two\nafter\n");
+  assert.deepStrictEqual(rangeTexts(projected.text, projected.deletedRanges), ["old one", "old two"]);
+  assert.deepStrictEqual(rangeTexts(projected.text, projected.addedRanges), ["new one", "new two"]);
+  assert.strictEqual(source, "before\nold one\nold two\nafter\n");
+  assert.deepStrictEqual(preview, snapshot);
+});
+
+test("virtual Diff document preserves separated hunks, CRLF, and a missing final newline", () => {
+  const source = "start\r\nold one\r\nkeep\r\nold two";
+  const preview = buildPreviewEdit(source, source, "start\r\nnew one\r\nkeep\r\nnew two");
+  const projected = buildInlineDiffDocument(preview, source);
+
+  assert.strictEqual(projected.text, "start\r\nold one\r\nnew one\r\nkeep\r\nold two\r\nnew two");
+  assert.deepStrictEqual(rangeTexts(projected.text, projected.deletedRanges), ["old one", "old two"]);
+  assert.deepStrictEqual(rangeTexts(projected.text, projected.addedRanges), ["new one", "new two"]);
+});
+
+test("virtual Diff document supports additions, deletions, blank lines, and new files", () => {
+  const additionSource = "first\nlast";
+  const addition = buildInlineDiffDocument(
+    buildPreviewEdit(additionSource, additionSource, "first\nadded\nlast"),
+    additionSource
+  );
+  assert.strictEqual(addition.text, "first\nadded\nlast");
+  assert.deepStrictEqual(addition.deletedRanges, []);
+  assert.deepStrictEqual(rangeTexts(addition.text, addition.addedRanges), ["added"]);
+
+  const deletionSource = "first\nremove\nlast";
+  const deletion = buildInlineDiffDocument(
+    buildPreviewEdit(deletionSource, deletionSource, "first\nlast"),
+    deletionSource
+  );
+  assert.strictEqual(deletion.text, deletionSource);
+  assert.deepStrictEqual(rangeTexts(deletion.text, deletion.deletedRanges), ["remove"]);
+  assert.deepStrictEqual(deletion.addedRanges, []);
+
+  const newFilePreview = { oldText: "", newText: "new one\n\nnew two\n", oldStart: 0, oldEnd: 0 };
+  const newFile = buildInlineDiffDocument(newFilePreview, "");
+  assert.strictEqual(newFile.text, "new one\n\nnew two\n");
+  assert.deepStrictEqual(newFile.deletedRanges, []);
+  assert.deepStrictEqual(rangeTexts(newFile.text, newFile.addedRanges), ["new one\n\nnew two"]);
+});
+
+test("source snapshot matching covers saved, dirty, deleted, and newly-created targets", () => {
+  const existing = { sourceKind: "document", sourceText: "original" };
+  assert.strictEqual(sourceSnapshotMatches(existing, {
+    documentPresent: true,
+    documentText: "original",
+    filePresent: true,
+    fileText: "original"
+  }), true);
+  assert.strictEqual(sourceSnapshotMatches(existing, {
+    documentPresent: true,
+    documentText: "user edit",
+    filePresent: true,
+    fileText: "original"
+  }), false);
+  assert.strictEqual(sourceSnapshotMatches(existing, {
+    documentPresent: true,
+    documentText: "original",
+    filePresent: true,
+    fileText: "external edit"
+  }), false);
+  assert.strictEqual(sourceSnapshotMatches(existing, {
+    documentPresent: false,
+    filePresent: false
+  }), false);
+
+  const missing = { sourceKind: "missing", sourceText: "" };
+  assert.strictEqual(sourceSnapshotMatches(missing, {
+    documentPresent: false,
+    filePresent: false
+  }), true);
+  assert.strictEqual(sourceSnapshotMatches(missing, {
+    documentPresent: false,
+    filePresent: true,
+    fileText: "created elsewhere"
+  }), false);
 });

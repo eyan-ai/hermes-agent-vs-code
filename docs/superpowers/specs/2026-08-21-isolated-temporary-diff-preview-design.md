@@ -2,7 +2,7 @@
 
 Date: 2026-08-21
 
-Status: Confirmed design; implementation not started
+Status: Implemented; automated regression passed, manual VS Code validation pending
 
 ## 1. Goal
 

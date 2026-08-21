@@ -54,6 +54,13 @@ test("permission popup reuses the existing frame with direct choices and custom 
   assert.match(main, /type: "reopenPermissionPreview"/);
 });
 
+test("edited Diff previews expose a preserving cancel action", () => {
+  assert.match(main, /Keep my edits and cancel this change/);
+  assert.match(main, /type:\s*"abandonDiffPreview"/);
+  assert.match(main, /p\.previewDiverged/);
+  assert.match(main, /previewDiverged:\s*Boolean\(message\.previewDiverged\)/);
+});
+
 test("permission responses retain request and session ownership", () => {
   assert.match(main, /type: "permissionResponse", decision: button\.dataset\.decision, optionId: button\.dataset\.optionId \|\| undefined, requestId: state\.permission\.requestId, sessionId: state\.permission\.sessionId/);
   assert.match(main, /state\.permission = message\.permission \|\| null/);
@@ -238,6 +245,16 @@ test("title input clicks retain native caret movement", () => {
   assert.match(main, /#titleInput"\)\?\.addEventListener\("blur",/);
 });
 
+test("manual titles are visibly marked in the top bar and session history", () => {
+  assert.match(main, /function manualTitleMarker\(session\)/);
+  assert.match(main, /session\?\.titleOrigin !== "manual"/);
+  assert.match(main, /title="Manually edited in VS Code"/);
+  assert.match(main, /<span class="title-text">\$\{renderedTitle\(session\)\}<\/span>/);
+  assert.match(main, /class="history-name">/);
+  assert.match(main, /manualTitleMarker\(active \|\| session\)/);
+  assert.match(styles, /\.title-origin-marker\s*\{/);
+});
+
 test("history search refreshes results without replacing the focused input", () => {
   assert.match(main, /function refreshHistoryResults\(\)/);
   assert.match(main, /list\.innerHTML = renderHistoryItems\(\)/);
@@ -362,11 +379,102 @@ test("high contrast themes use an explicit contrast border", () => {
   assert.match(styles, /body\.vscode-high-contrast \.message\.user \.bubble[\s\S]*border-color:\s*var\(--vscode-contrastBorder/);
 });
 
-test("Run settings keeps Mode and adds a full-width Model selector without Reset", () => {
+test("Run settings uses one editable Model combobox and a root overlay", () => {
   assert.doesNotMatch(main, /id="resetMode"/);
-  assert.match(main, /<div class="model-field">[\s\S]*<label[^>]*>Model<\/label>[\s\S]*<select[^>]*id="modelSelect"/);
-  assert.match(main, /state\.models\.map\(/);
-  assert.match(main, /#modelSelect"\)\?\.addEventListener\("change"/);
-  assert.match(styles, /\.model-field\s*\{[^}]*display:\s*grid[^}]*gap:/);
-  assert.match(styles, /\.model-select\s*\{[^}]*width:\s*100%/);
+  assert.match(main, /class="mode-panel-content"/);
+  assert.match(main, /<div class="model-field">[\s\S]*<span[^>]*>Model<\/span>[\s\S]*id="modelPickerInput"/);
+  assert.match(main, /id="modelPickerInput"[^>]*role="combobox"[^>]*aria-autocomplete="list"[^>]*aria-controls="modelList"[^>]*aria-expanded=/);
+  assert.strictEqual((main.match(/id="modelPickerInput"/g) || []).length, 1);
+  assert.doesNotMatch(main, /id="modelSearch"|class="model-search"/);
+  assert.match(main, /function ensureSettingsOverlayRoot\(/);
+  assert.match(main, /document\.body\.appendChild\(root\)/);
+  assert.match(main, /id = "settingsOverlayRoot"/);
+  assert.match(main, /function renderModelOverlay\(/);
+  assert.match(main, /No matching models/);
+  assert.match(main, /HermesModelPicker\.filterModels/);
+  assert.match(main, /HermesModelPicker\.nextSelectableIndex/);
+  assert.match(main, /document\.querySelector\("\.model-combobox"\)\?\.addEventListener\("click"[\s\S]{0,180}modelInput\?\.focus\(\)[\s\S]{0,100}openModelPicker\(\)/);
+  assert.match(main, /function closeModelPicker\(/);
+  assert.match(main, /function positionOpenPicker\(/);
+  assert.match(main, /getBoundingClientRect\(\)/);
+  assert.match(main, /HermesModelPicker\.calculateOverlayPlacement/);
+  assert.match(main, /requestAnimationFrame\(positionOpenPicker\)/);
+  assert.match(main, /state\.settings\.reasoningEffortSupported[\s\S]*class="effort-field"[\s\S]*id="effortPickerButton"/);
+  assert.match(main, /ArrowUp/);
+  assert.match(main, /ArrowDown/);
+  assert.match(main, /Enter/);
+  assert.match(main, /Escape/);
+  assert.match(main, /Low[\s\S]*Medium[\s\S]*High[\s\S]*Extra High[\s\S]*Max[\s\S]*Ultra/);
+  assert.doesNotMatch(main, /Update Hermes to configure reasoning effort/);
+  assert.doesNotMatch(main, /class="effort-picker"/);
+  assert.match(main, /type:\s*"refreshModels"/);
+  assert.match(main, /Refresh models/);
+  assert.match(main, /Refreshing…/);
+  assert.match(main, /Refreshed/);
+  assert.match(main, /Failed/);
+  assert.match(main, /Unavailable/);
+  assert.match(styles, /#settingsOverlayRoot\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/);
+  assert.match(styles, /\.model-list\s*\{[^}]*position:\s*fixed/);
+  assert.match(styles, /\.effort-list\s*\{[^}]*position:\s*fixed/);
+  assert.doesNotMatch(styles, /#modePopover\s*\{[^}]*height:\s*min\(468px/);
+  assert.doesNotMatch(styles, /\.model-list, \.effort-list\s*\{[^}]*bottom:\s*50px/);
+  assert.match(styles, /\.mode-panel-content\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(styles, /\.model-combobox\s*\{[^}]*width:\s*100%/);
+  assert.match(styles, /\.model-combobox \.dropdown-icon\s*\{[^}]*width:\s*16px[^}]*height:\s*16px/);
+  assert.match(main, /\["Manual", "Auto"\]/);
+  assert.match(main, /Always ask for approval before making each edit\./);
+  assert.match(main, /Only ask for approval when actions detected as potentially unsafe\./);
+});
+
+test("Refresh closes transient Run settings lists before requesting models", () => {
+  const start = main.indexOf('document.querySelector("#refreshModels")');
+  const end = main.indexOf("\n  const prompt", start);
+  const handler = main.slice(start, end);
+  assert.match(handler, /closeModelPicker\(/);
+  assert.match(handler, /state\.effortPickerOpen = false/);
+  assert.ok(handler.indexOf("closeModelPicker(") < handler.indexOf('vscode.postMessage({ type: "refreshModels" })'));
+  assert.ok(handler.indexOf("state.effortPickerOpen = false") < handler.indexOf('vscode.postMessage({ type: "refreshModels" })'));
+});
+
+test("typing and dismissing Model never send a settings change", () => {
+  const inputStart = main.indexOf('modelInput?.addEventListener("input"');
+  const inputEnd = main.indexOf('modelInput?.addEventListener("keydown"', inputStart);
+  const inputHandler = main.slice(inputStart, inputEnd);
+  assert.match(inputHandler, /state\.modelQuery = event\.currentTarget\.value/);
+  assert.match(inputHandler, /renderModelOverlay\(\)/);
+  assert.doesNotMatch(inputHandler, /settingsChanged|vscode\.postMessage/);
+
+  const closeStart = main.indexOf("function closeModelPicker(");
+  const closeEnd = main.indexOf("\nfunction selectModel(", closeStart);
+  const close = main.slice(closeStart, closeEnd);
+  assert.match(close, /state\.modelFilterActive = false/);
+  assert.match(close, /state\.modelQuery = ""/);
+  assert.doesNotMatch(close, /settingsChanged|vscode\.postMessage/);
+  assert.match(main, /state\.modelPickerOpen && !event\.target\.closest\("\.model-combobox, #modelList"\)[\s\S]{0,100}closeModelPicker\(\)/);
+});
+
+test("Model selection preserves Mode and sends one existing settings change", () => {
+  const selectStart = main.indexOf("function selectModel(");
+  const selectEnd = main.indexOf("\nfunction selectReasoningEffort(", selectStart);
+  const select = main.slice(selectStart, selectEnd);
+  assert.match(select, /if \(!selected \|\| selected\.unavailable\) return/);
+  assert.strictEqual((select.match(/settingsChanged\(\)/g) || []).length, 1);
+  assert.doesNotMatch(select, /state\.settings\.mode\s*=/);
+
+  const modeBlock = main.slice(main.indexOf('document.querySelectorAll(".approval-option")'), main.indexOf('const modelInput = document.querySelector("#modelPickerInput")'));
+  assert.match(modeBlock, /state\.settings\.mode = button\.dataset\.mode/);
+  assert.match(modeBlock, /settingsChanged\(\)/);
+});
+
+test("state refresh preserves an active title or history rename editor", () => {
+  assert.match(main, /function captureRenameFocus\(/);
+  assert.match(main, /function restoreRenameFocus\(/);
+
+  const stateStart = main.indexOf('if (message.type === "state")');
+  const stateEnd = main.indexOf('if (message.type === "editorContext")', stateStart);
+  const stateHandler = main.slice(stateStart, stateEnd);
+  assert.match(stateHandler, /const renameFocus = captureRenameFocus\(\)/);
+  assert.match(stateHandler, /state\.renamingSessionId && !state\.sessions\.some\(session => session\.id === state\.renamingSessionId\)/);
+  assert.match(stateHandler, /restoreRenameFocus\(renameFocus\)/);
+  assert.doesNotMatch(stateHandler, /if \(needsFullRender\) \{\s*state\.renamingSessionId = null/);
 });

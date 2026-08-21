@@ -2,9 +2,12 @@
 
 const assert = require("assert");
 const {
+  EFFORT_OPTIONS,
+  mergeRefreshedModels,
   normalizeModelState,
   resolveSelectedModel,
-  configuredModelState
+  configuredModelState,
+  rememberReasoningEffort
 } = require("../lib/model-settings");
 
 function test(name, run) {
@@ -71,4 +74,44 @@ test("keeps the configured default visible when the provider catalog is absent",
     options: [{ id: "deepseek:deepseek-v4-pro", name: "deepseek-v4-pro", description: "Provider: deepseek" }],
     current: "deepseek:deepseek-v4-pro"
   });
+});
+
+test("keeps an unavailable selected model visible after refresh without switching it", () => {
+  assert.deepStrictEqual(mergeRefreshedModels(
+    { options: [{ id: "old:model", name: "model", description: "Provider: old" }], current: "old:model" },
+    { options: [{ id: "new:model", name: "model", description: "Provider: new" }], current: "new:model" },
+    "old:model"
+  ), {
+    options: [
+      { id: "old:model", name: "model", description: "Unavailable", unavailable: true },
+      { id: "new:model", name: "model", description: "Provider: new" }
+    ],
+    current: "old:model"
+  });
+});
+
+test("uses the refreshed current model when no model was previously selected", () => {
+  const refreshed = { options: [{ id: "new:model", name: "model", description: "" }], current: "new:model" };
+  assert.deepStrictEqual(mergeRefreshedModels({ options: [], current: "" }, refreshed, ""), refreshed);
+});
+
+test("exposes exact effort labels and wire values", () => {
+  assert.deepStrictEqual(EFFORT_OPTIONS, [
+    { label: "Low", value: "low" },
+    { label: "Medium", value: "medium" },
+    { label: "High", value: "high" },
+    { label: "Extra High", value: "xhigh" },
+    { label: "Max", value: "max" },
+    { label: "Ultra", value: "ultra" }
+  ]);
+});
+
+test("remembers reasoning effort independently for each full model ID", () => {
+  let remembered = rememberReasoningEffort({}, "provider:model-a", "high");
+  remembered = rememberReasoningEffort(remembered, "provider:model-b", "ultra");
+  assert.deepStrictEqual(remembered, {
+    "provider:model-a": "high",
+    "provider:model-b": "ultra"
+  });
+  assert.strictEqual(rememberReasoningEffort(remembered, "provider:model-a", "invalid"), remembered);
 });
