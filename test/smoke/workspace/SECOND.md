@@ -1,1 +1,0 @@
-second smoke document
