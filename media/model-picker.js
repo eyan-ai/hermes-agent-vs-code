@@ -16,6 +16,22 @@
       .includes(needle));
   }
 
+  function displayModelName(model) {
+    const name = String(model?.name || model?.id || "").trim();
+    if (!name) return "";
+    const descriptionProvider = String(model?.description || "")
+      .match(/^Provider:\s*([^\u00b7]+?)(?:\s*\u00b7|$)/i)?.[1]?.trim();
+    const idProvider = String(model?.id || "").split(":", 1)[0].trim();
+    const providers = [descriptionProvider, idProvider].filter(Boolean);
+    for (const provider of providers) {
+      const prefix = `${provider} \u00b7 `;
+      if (name.toLocaleLowerCase().startsWith(prefix.toLocaleLowerCase())) {
+        return name.slice(prefix.length).trim() || name;
+      }
+    }
+    return name;
+  }
+
   function nextSelectableIndex(models, currentIndex, delta) {
     const source = Array.isArray(models) ? models : [];
     if (!source.length || !source.some(model => !model?.unavailable)) return -1;
@@ -42,11 +58,13 @@
     const desiredHeight = Math.min(contentHeight, maxListHeight);
     const spaceBelow = Math.max(0, viewportHeight - margin - bottom);
     const spaceAbove = Math.max(0, top - margin);
-    const direction = desiredHeight <= spaceBelow
-      ? "down"
-      : desiredHeight <= spaceAbove
-        ? "up"
-        : spaceBelow >= spaceAbove ? "down" : "up";
+    const direction = input?.forceAbove
+      ? "up"
+      : desiredHeight <= spaceBelow
+        ? "down"
+        : desiredHeight <= spaceAbove
+          ? "up"
+          : spaceBelow >= spaceAbove ? "down" : "up";
     const selectedSpace = direction === "down" ? spaceBelow : spaceAbove;
     const maxHeight = Math.max(0, Math.min(desiredHeight, selectedSpace));
     const availableWidth = Math.max(0, viewportWidth - margin * 2);
@@ -67,6 +85,7 @@
 
   return {
     calculateOverlayPlacement,
+    displayModelName,
     filterModels,
     nextSelectableIndex
   };

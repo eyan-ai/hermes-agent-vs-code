@@ -2,9 +2,9 @@ const vscode = require("vscode");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
-const { spawn } = require("child_process");
 const { createChatParser } = require("./lib/chat-parser");
-const { AcpClient } = require("./lib/acp-client");
+const { BackgroundClient } = require("./lib/background-client");
+const { resolveNodeRuntime } = require("./lib/node-runtime");
 const { createAcpRenderer } = require("./lib/acp-render");
 const { buildInlineDiffDocument, changedLineIndices, sourceSnapshotMatches } = require("./lib/diff-preview");
 const { TurnLifecycle, TurnCancelledError, isTurnCancelled } = require("./lib/turn-lifecycle");
@@ -15,7 +15,9 @@ const { SessionCancellationBarrier } = require("./lib/session-cancellation-barri
 const { forkAcpSession, installAcpSessionReplacement } = require("./lib/acp-session-handoff");
 const { buildGeneratedDocumentCandidates } = require("./lib/generated-document");
 const { buildHermesPromptBlocks, mergeHermesSessions } = require("./lib/hermes-sessions");
-const { configuredModelState, mergeRefreshedModels, normalizeModelState, rememberReasoningEffort, resolveSelectedModel } = require("./lib/model-settings");
+const { configuredModelState, latestRuntimeModelState, mergeRefreshedModels, normalizeModelState, normalizeReasoningByModel, rememberReasoningEffort, resolveSelectedModel } = require("./lib/model-settings");
+const { persistModelReasoningEffort } = require("./lib/reasoning-config");
+const { markSessionCompleted, markSessionViewed, normalizeWorkspaceAgentState, resolveWorkspaceSessionId, sessionIsRunning } = require("./lib/session-metadata");
 const { prepareDocumentReviewBatch } = require("./lib/document-review");
 const { projectV4aUpdatePreview } = require("./lib/v4a-preview");
 const { applyAutomaticTitle, applyManualTitle, inferTitleOrigin } = require("./lib/session-title");
@@ -23,6 +25,13 @@ const { applyAutomaticTitle, applyManualTitle, inferTitleOrigin } = require("./l
 const VIEW_ID = "hermesAgent.sidebar";
 const EDITOR_VIEW_TYPE = "hermesAgent.editorSession";
 const SESSION_KEY = "hermesAgent.sessions";
+const QUEUE_KEY = "hermesAgent.promptQueue";
+const WORKSPACE_AGENT_STATE_KEY = "hermesAgent.workspaceAgentState";
+const ACP_INITIALIZE_PARAMS = {
+  protocolVersion: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "hermes-agent-vscode", version: "0.2.53" }
+};
 const FINAL_ANSWER_ONLY_PROMPT = `The task execution has ended, but no user-facing final answer was produced.
 
 Return only the final response for the user.
@@ -151,6 +160,7 @@ function hermesModelState() {
 function activate(context) {
   const provider = new HermesSidebarProvider(context);
   _activeProvider = provider;
+  void provider.ensureBackgroundRecovery().finally(() => provider.restoreWorkspaceAgentState());
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -186,6 +196,9 @@ function activate(context) {
       }
     }),
     vscode.window.onDidChangeTextEditorSelection(() => provider.refreshEditorContext()),
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration("hermesAgent.nodePath")) provider.resetBackgroundNodeRuntime();
+    }),
     { dispose: () => provider.dispose() }
   );
 }
@@ -199,16 +212,23 @@ function deactivate() {
 class HermesSidebarProvider {
   constructor(context) {
     this.context = context;
+    this.disposing = false;
     this.view = undefined;
     this.panels = new Set();
     this.sessions = this.loadSessions();
-    this.activeSessionId = this.sessions[0]?.id;
+    this.workspaceAgentState = normalizeWorkspaceAgentState(this.context.workspaceState.get(WORKSPACE_AGENT_STATE_KEY));
+    this.activeSessionId = resolveWorkspaceSessionId(this.workspaceAgentState, this.sessions);
+    this.runningSessionIds = new Set(this.sessions.filter(sessionIsRunning).map(session => session.id));
     this.cliTurns = new Map();
+    this.cliClient = undefined;
     this.lastActiveEditor = vscode.window.activeTextEditor;
     // ACP transport state (lazy): one shared `hermes acp` process for all
     // sessions; per-session mapping uiSession.id → acp session_id.
     this.acp = undefined;
     this.acpSessions = new Map();
+    for (const session of this.sessions) {
+      if (session.acpSessionId) this.acpSessions.set(session.id, session.acpSessionId);
+    }
     this.acpRenderers = new Map();
     this.acpAvailableCommands = new Map();
     this.acpCommandCaptures = new Map();
@@ -216,7 +236,11 @@ class HermesSidebarProvider {
     this.retiredAcpSessions = new Set();
     this.activeTurns = new Map();
     this.mockTurns = new Set();
-    this.promptQueue = new PromptQueue(id);
+    this._queueSave = Promise.resolve();
+    this.promptQueue = new PromptQueue(id, snapshot => {
+      this._queueSave = this._queueSave.then(() => this.context.globalState.update(QUEUE_KEY, snapshot));
+    });
+    this.promptQueue.restore(this.context.globalState.get(QUEUE_KEY, {}));
     this.cancellationBarriers = new SessionCancellationBarrier();
     this.drainingSessions = new Set();
     this.steeringQueueItems = new Set();
@@ -233,12 +257,78 @@ class HermesSidebarProvider {
     });
     this.context.subscriptions.push(this._diffPreviewProvider);
     this._movingEditorTabs = false;
+    this.recoveredBackgroundRuns = new Set();
+    this._backgroundRecoveryPromise = undefined;
+    this._ensureAcpPromise = undefined;
+    this._nodeRuntimePromise = undefined;
+    this._nodeRuntimeErrorKey = "";
   }
 
   resolveWebviewView(view) {
     this.view = view;
     this.configureWebview(view.webview);
-    this.refreshHermesSessions().catch(() => {});
+    view.onDidChangeVisibility?.(() => {
+      if (view.visible) void this.markSessionAsViewed(this.activeSessionId);
+    });
+    void this.ensureBackgroundRecovery();
+  }
+
+  ensureBackgroundRecovery() {
+    if (this._backgroundRecoveryPromise) return this._backgroundRecoveryPromise;
+    this._backgroundRecoveryPromise = this.recoverBackgroundRunsWithRetry()
+      .catch(error => this.handleBackgroundRecoveryFailure(error))
+      .finally(() => this.refreshHermesSessions().catch(() => {}));
+    return this._backgroundRecoveryPromise;
+  }
+
+  async recoverBackgroundRunsWithRetry() {
+    const retryDelays = [250, 1000];
+    let lastError;
+    for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+      try {
+        return await this.recoverBackgroundRuns();
+      } catch (error) {
+        lastError = error;
+        if (attempt < retryDelays.length) await delay(retryDelays[attempt]);
+      }
+    }
+    throw lastError;
+  }
+
+  handleBackgroundRecoveryFailure(error) {
+    if (error?.code === "NODE_NOT_FOUND" || error?.code === "INVALID_CONFIGURED_NODE") return;
+    vscode.window.showWarningMessage(`Hermes background host unavailable: ${error.message || error}`);
+  }
+
+  backgroundNodeRuntime() {
+    if (this._nodeRuntimePromise) return this._nodeRuntimePromise;
+    const configuredPath = vscode.workspace.getConfiguration("hermesAgent").get("nodePath", "");
+    const resolving = resolveNodeRuntime({ configuredPath });
+    this._nodeRuntimePromise = resolving;
+    resolving.catch(error => this.presentNodeRuntimeError(error));
+    return resolving;
+  }
+
+  presentNodeRuntimeError(error) {
+    const key = `${error?.code || "NODE_RUNTIME_ERROR"}:${error?.message || error}`;
+    if (this._nodeRuntimeErrorKey === key) return;
+    this._nodeRuntimeErrorKey = key;
+    const message = `Hermes background tasks require a standalone Node.js executable. ${error.message || error}`;
+    void vscode.window.showErrorMessage(message, "Open Settings").then(selection => {
+      if (selection === "Open Settings") {
+        return vscode.commands.executeCommand("workbench.action.openSettings", "hermesAgent.nodePath");
+      }
+      return undefined;
+    });
+  }
+
+  resetBackgroundNodeRuntime() {
+    this._nodeRuntimePromise = undefined;
+    this._nodeRuntimeErrorKey = "";
+    if (!this.acp && !this.cliClient) {
+      this._backgroundRecoveryPromise = undefined;
+      void this.ensureBackgroundRecovery();
+    }
   }
 
   post(message, explicitSessionId) {
@@ -280,9 +370,6 @@ class HermesSidebarProvider {
         titleOrigin: inferTitleOrigin(session),
         messages: (session.messages || [])
           .filter(message => !(message.role === "system" && message.command === "/deny"))
-          .map(message => message.role === "assistant" && message.status === "running"
-            ? { ...message, status: "stopped", finishedAt: message.finishedAt || Date.now() }
-            : message)
       }));
     }
     return [createSession("Untitled")];
@@ -290,6 +377,61 @@ class HermesSidebarProvider {
 
   saveSessions() {
     return this.context.globalState.update(SESSION_KEY, this.sessions);
+  }
+
+  saveWorkspaceAgentState(patch = {}) {
+    this.workspaceAgentState = normalizeWorkspaceAgentState({
+      ...this.workspaceAgentState,
+      activeSessionId: this.activeSessionId,
+      ...patch
+    });
+    return this.context.workspaceState.update(WORKSPACE_AGENT_STATE_KEY, this.workspaceAgentState);
+  }
+
+  async restoreWorkspaceAgentState() {
+    const restoredSessionId = resolveWorkspaceSessionId(this.workspaceAgentState, this.sessions);
+    if (restoredSessionId) this.activeSessionId = restoredSessionId;
+    if (!this.workspaceAgentState.editorPanelOpen || this.panels.size) {
+      await this.saveWorkspaceAgentState();
+      this.postState();
+      return false;
+    }
+    const panelSessionId = this.sessions.some(session => session.id === this.workspaceAgentState.editorSessionId)
+      ? this.workspaceAgentState.editorSessionId
+      : restoredSessionId;
+    if (!panelSessionId) return false;
+    await this.ensureEditorIsolation();
+    this.createEditorSessionPanel(panelSessionId, this.workspaceAgentState.editorColumn, { preserveFocus: true });
+    return true;
+  }
+
+  isSessionVisible(sessionId) {
+    if (this.view?.visible && this.activeSessionId === sessionId) return true;
+    return [...this.panels].some(panel => panel.visible && panel.sessionId === sessionId);
+  }
+
+  trackSessionCompletionTransitions() {
+    let changed = false;
+    for (const session of this.sessions) {
+      if (sessionIsRunning(session)) {
+        this.runningSessionIds.add(session.id);
+        continue;
+      }
+      if (!this.runningSessionIds.delete(session.id)) continue;
+      changed = markSessionCompleted(session, {
+        visible: this.isSessionVisible(session.id),
+        completedAt: [...(session.messages || [])].reverse().find(message => message.role === "assistant")?.finishedAt
+      }) || changed;
+    }
+    return changed;
+  }
+
+  async markSessionAsViewed(sessionId) {
+    const session = this.sessions.find(item => item.id === sessionId);
+    if (!markSessionViewed(session)) return false;
+    await this.saveSessions();
+    this.postState();
+    return true;
   }
 
 
@@ -303,16 +445,21 @@ class HermesSidebarProvider {
     return session;
   }
 
-  async newSession(activate = true) {
+  async newSession(activate = true, panel) {
     const session = createSession("Untitled");
-    const configuredModels = hermesModelState();
+    const runtimeModels = latestRuntimeModelState(this.sessions, this.activeSessionId);
+    const configuredModels = runtimeModels || hermesModelState();
+    if (runtimeModels) session.modelState = runtimeModels;
     session.settings = {
       mode: lastMode(this.context),
-      model: lastModel(this.context, configuredModels.current)
+      model: lastModel(this.context, configuredModels.current),
+      reasoningByModel: lastReasoningByModel(this.context)
     };
     this.sessions.unshift(session);
     if (activate) this.activeSessionId = session.id;
+    if (panel) panel.sessionId = session.id;
     await this.saveSessions();
+    if (activate) await this.saveWorkspaceAgentState();
     // Surface the active document as default context immediately. If the
     // last-active editor is stale (extension activated after the file was
     // opened), pick up the currently focused editor as a fallback.
@@ -328,10 +475,15 @@ class HermesSidebarProvider {
     const session = await this.newSession(false);
     await this.ensureEditorIsolation();
     const targetColumn = this.findAgentColumn() || this.columnRightOfDocuments();
+    return this.createEditorSessionPanel(session.id, targetColumn);
+  }
+
+  createEditorSessionPanel(sessionId, targetColumn, { preserveFocus = false } = {}) {
+    const session = this.activeSession(sessionId);
     const panel = vscode.window.createWebviewPanel(
       EDITOR_VIEW_TYPE,
       session.title || "Hermes Agent",
-      targetColumn,
+      preserveFocus ? { viewColumn: targetColumn || this.columnRightOfDocuments(), preserveFocus: true } : targetColumn,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -346,10 +498,27 @@ class HermesSidebarProvider {
     panel.sessionId = session.id;
     this.panels.add(panel);
     this.configureWebview(panel.webview, panel);
+    void this.saveWorkspaceAgentState({
+      editorPanelOpen: true,
+      editorSessionId: session.id,
+      editorColumn: panel.viewColumn || targetColumn
+    });
+    panel.onDidChangeViewState?.(() => {
+      void this.saveWorkspaceAgentState({
+        editorPanelOpen: true,
+        editorSessionId: panel.sessionId,
+        editorColumn: panel.viewColumn
+      });
+      if (panel.visible) void this.markSessionAsViewed(panel.sessionId);
+    });
     panel.onDidDispose(() => {
       this.panels.delete(panel);
+      if (!this.disposing && this.panels.size === 0) {
+        void this.saveWorkspaceAgentState({ editorPanelOpen: false, editorSessionId: "", editorColumn: undefined });
+      }
     });
     this.refreshEditorContext();
+    return panel;
   }
 
   /** Keep editor-session tab titles in sync with their session title. */
@@ -501,14 +670,22 @@ class HermesSidebarProvider {
         break;
       case "newSession":
         {
-          const session = await this.newSession(!panel);
-          if (panel) panel.sessionId = session.id;
+          const session = await this.newSession(!panel, panel);
+          if (panel) {
+            await this.saveWorkspaceAgentState({ editorPanelOpen: true, editorSessionId: session.id, editorColumn: panel.viewColumn });
+          }
           this.postState();
         }
         break;
       case "selectSession":
-        if (panel) panel.sessionId = message.id;
-        else this.activeSessionId = message.id;
+        if (panel) {
+          panel.sessionId = message.id;
+          await this.saveWorkspaceAgentState({ editorPanelOpen: true, editorSessionId: message.id, editorColumn: panel.viewColumn });
+        } else {
+          this.activeSessionId = message.id;
+          await this.saveWorkspaceAgentState();
+        }
+        markSessionViewed(this.sessions.find(session => session.id === message.id));
         await this.saveSessions();
         this.postState();
         break;
@@ -628,9 +805,28 @@ class HermesSidebarProvider {
     session.modelRefreshStatus = "refreshing";
     this.postState();
     try {
-      _hermesConfig = null;
-      _hermesModelState = null;
-      const refreshed = hermesModelState();
+      const config = vscode.workspace.getConfiguration("hermesAgent");
+      const command = config.get("command", "");
+      let refreshed;
+      if (command && config.get("useAcp", true)) {
+        const client = await this.ensureAcp(command);
+        const mappedBeforeRefresh = this.acpSessions.get(session.id);
+        const acpSessionId = await this.ensureMappedAcpSession(client, session);
+        if (mappedBeforeRefresh && !this.isSessionRunning(session.id)) {
+          const resumed = await client.request("session/resume", {
+            cwd: this.workspaceCwd(),
+            sessionId: acpSessionId,
+            mcpServers: []
+          });
+          this.applyAcpSessionState(session, acpSessionId, resumed?.models, resumed?.configOptions);
+        }
+        refreshed = session.modelState?.options?.length ? session.modelState : previous;
+      }
+      if (!refreshed?.options?.length) {
+        _hermesConfig = null;
+        _hermesModelState = null;
+        refreshed = hermesModelState();
+      }
       const selected = String(session.settings?.model || previous.current || "");
       session.modelState = mergeRefreshedModels(previous, refreshed, selected);
       session.modelRefreshStatus = "refreshed";
@@ -658,39 +854,35 @@ class HermesSidebarProvider {
       this.postState();
       return false;
     }
-    if (selectedModel && selectedModel !== previous.model && acpSessionId && this.acp) {
-      try {
-        await this.acp.request("session/set_model", {
-          sessionId: acpSessionId,
-          modelId: selectedModel
-        });
-      } catch (error) {
-        vscode.window.showErrorMessage(`Unable to switch Hermes model: ${error.message}`);
-        this.postState();
-        return false;
-      }
-    }
     const requestedEffort = String(settings.reasoningEffort || "").toLowerCase();
     const reasoningByModel = rememberReasoningEffort(previous.reasoningByModel || {}, selectedModel, requestedEffort);
     const effectiveEffort = selectedModel && reasoningByModel[selectedModel];
     const reasoningChanged = Boolean(requestedEffort && effectiveEffort !== previous.reasoningByModel?.[selectedModel]);
     const modelChanged = Boolean(selectedModel && selectedModel !== previous.model);
-    if (effectiveEffort && session.reasoningEffortSupported && acpSessionId && this.acp && (reasoningChanged || modelChanged)) {
+    if (effectiveEffort && (reasoningChanged || modelChanged)) {
       try {
-        await this.acp.request("session/set_config_option", {
-          sessionId: acpSessionId,
-          configId: "reasoning_effort",
-          value: effectiveEffort
+        const command = vscode.workspace.getConfiguration("hermesAgent").get("command", "");
+        await persistModelReasoningEffort({
+          command,
+          model: selectedModel,
+          effort: effectiveEffort
         });
       } catch (error) {
         vscode.window.showErrorMessage(`Unable to set Hermes reasoning effort: ${error.message}`);
-        if (modelChanged) {
-          session.settings = { ...previous, mode, model: selectedModel };
-          if (session.modelState?.options?.length) session.modelState.current = selectedModel;
-          saveLastMode(this.context, mode);
-          saveLastModel(this.context, selectedModel);
-          await this.saveSessions();
-        }
+        this.postState();
+        return false;
+      }
+    }
+    if (selectedModel && acpSessionId && this.acp && (modelChanged || reasoningChanged)) {
+      try {
+        // Hermes rebuilds the session Agent on set_model, which reloads the
+        // per-model reasoning override written through its own config CLI.
+        await this.acp.request("session/set_model", {
+          sessionId: acpSessionId,
+          modelId: selectedModel
+        });
+      } catch (error) {
+        vscode.window.showErrorMessage(`Unable to apply Hermes model settings: ${error.message}`);
         this.postState();
         return false;
       }
@@ -699,6 +891,7 @@ class HermesSidebarProvider {
     if (session.modelState?.options?.length && selectedModel) session.modelState.current = selectedModel;
     saveLastMode(this.context, mode);
     if (selectedModel) saveLastModel(this.context, selectedModel);
+    await saveLastReasoningByModel(this.context, reasoningByModel);
     await this.saveSessions();
     this.postState();
     return true;
@@ -721,13 +914,22 @@ class HermesSidebarProvider {
     }
     this.promptQueue.clear(id);
     this.sessions.splice(index, 1);
+    const fallbackSessionId = this.sessions[Math.max(0, index - 1)]?.id || this.sessions[0]?.id;
     if (this.activeSessionId === id) {
-      this.activeSessionId = this.sessions[Math.max(0, index - 1)]?.id || this.sessions[0]?.id;
+      this.activeSessionId = fallbackSessionId;
     }
     for (const panel of this.panels) {
-      if (panel.sessionId === id) panel.sessionId = this.sessions[0]?.id;
+      if (panel.sessionId === id) panel.sessionId = fallbackSessionId;
     }
     await this.saveSessions();
+    const editorPanel = [...this.panels][0];
+    await this.saveWorkspaceAgentState(editorPanel ? {
+      editorPanelOpen: true,
+      editorSessionId: editorPanel.sessionId,
+      editorColumn: editorPanel.viewColumn
+    } : this.workspaceAgentState.editorSessionId === id ? {
+      editorSessionId: fallbackSessionId
+    } : {});
     this.postState();
   }
 
@@ -959,10 +1161,7 @@ class HermesSidebarProvider {
     session.acpSessionId = acpSessionId;
     const runtimeModels = normalizeModelState(models);
     if (runtimeModels.options.length) session.modelState = runtimeModels;
-    const options = Array.isArray(configOptions) ? configOptions : [];
-    session.reasoningEffortSupported = options.some(option => (
-      option?.id === "reasoning_effort" || option?.configId === "reasoning_effort" || option?.config_id === "reasoning_effort"
-    ));
+    session.reasoningEffortSupported = true;
   }
 
   async refreshHermesSessions() {
@@ -987,6 +1186,7 @@ class HermesSidebarProvider {
         : this.sessions.find(item => item.id === this.activeSessionId);
       this.activeSessionId = active?.id || this.sessions[0]?.id;
       await this.saveSessions();
+      await this.saveWorkspaceAgentState();
       this.postState();
       return true;
     })().finally(() => { this._sessionRefreshPromise = undefined; });
@@ -1093,9 +1293,8 @@ class HermesSidebarProvider {
         }
         return true;
       case "/new": {
-        const session = await this.newSession(!panel);
+        const session = await this.newSession(!panel, panel);
         if (args) await this.renameSession(session.id, args);
-        if (panel) panel.sessionId = session.id;
         await this.appendCommandNotice(session.id, command, `已创建新会话${args ? `：${args}` : "。"}`);
         return true;
       }
@@ -1322,13 +1521,39 @@ class HermesSidebarProvider {
         return;
       } catch (err) {
         if (assistantMessage.status === "stopped" || isTurnCancelled(err)) return;
+        if (this.isNodeRuntimeError(err)) {
+          await this.failNodeRuntimeTurn(assistantMessage, err);
+          return;
+        }
         // ACP failed (missing extra, protocol error, …) — surface once, then
         // fall back to the CLI parser path so the extension still works.
         assistantMessage.thinking.push({ kind: "error", title: "ACP unavailable", text: `${err.message || err}\nFalling back to CLI output parsing.` });
         this.postState();
       }
     }
-    await this.runCli(command, config.get("commandArgs", []), prompt, userMessage, assistantMessage, sessionId);
+    try {
+      await this.runCli(command, config.get("commandArgs", []), prompt, userMessage, assistantMessage, sessionId);
+    } catch (error) {
+      if (!this.isNodeRuntimeError(error)) throw error;
+      await this.failNodeRuntimeTurn(assistantMessage, error);
+    }
+  }
+
+  isNodeRuntimeError(error) {
+    return error?.code === "NODE_NOT_FOUND" || error?.code === "INVALID_CONFIGURED_NODE";
+  }
+
+  async failNodeRuntimeTurn(assistantMessage, error) {
+    assistantMessage.status = "failed";
+    assistantMessage.finishedAt = Date.now();
+    assistantMessage.thinking.push({
+      kind: "error",
+      title: "Standalone Node.js unavailable",
+      text: error.message || String(error),
+      finalized: true
+    });
+    await this.saveSessions();
+    this.postState();
   }
 
   /**
@@ -1361,10 +1586,16 @@ class HermesSidebarProvider {
     let client;
     let acpSessionId;
     let renderer;
+    let detached = false;
+    const backgroundRunId = assistantMessage.backgroundRunId || id();
+    assistantMessage.backgroundRunId = backgroundRunId;
+    await this.saveSessions();
 
     try {
       client = await this.ensureAcp(command);
       turn.client = client;
+      if (lifecycle.cancelled) throw new TurnCancelledError();
+      await client.prepareStandaloneForNewRun();
       if (lifecycle.cancelled) throw new TurnCancelledError();
 
       acpSessionId = await this.ensureMappedAcpSession(client, session);
@@ -1394,18 +1625,6 @@ class HermesSidebarProvider {
         } else if (session.modelState?.options?.length) {
           session.modelState.current = selectedModel;
         }
-        const rememberedEffort = session.settings.reasoningByModel?.[selectedModel];
-        if (rememberedEffort && session.reasoningEffortSupported) {
-          try {
-            await client.request("session/set_config_option", {
-              sessionId: acpSessionId,
-              configId: "reasoning_effort",
-              value: rememberedEffort
-            });
-          } catch (error) {
-            vscode.window.showWarningMessage(`Unable to apply the remembered Hermes reasoning effort: ${error.message}`);
-          }
-        }
         await this.saveSessions();
         this.postState();
       }
@@ -1422,7 +1641,15 @@ class HermesSidebarProvider {
       const promptBlocks = buildHermesPromptBlocks(prompt, userMessage);
       const finishReason = await client.request("session/prompt", {
         sessionId: acpSessionId,
-        prompt: promptBlocks
+        prompt: promptBlocks,
+        _background: {
+          runId: backgroundRunId,
+          uiSessionId: session.id,
+          userMessageId: userMessage.id,
+          assistantMessageId: assistantMessage.id,
+          mode,
+          finalAnswerPrompt: FINAL_ANSWER_ONLY_PROMPT
+        }
       });
 
       if (finishReason?.usage) session.usage = finishReason.usage;
@@ -1431,7 +1658,7 @@ class HermesSidebarProvider {
       if (turn.assistantMessage.status === "running") {
         const status = finishReason && finishReason.stopReason === "refusal" ? "failed" : "done";
         const finalization = renderer.finalize(status);
-        if (status === "done" && finalization && finalization.needsFinalAnswer) {
+        if (status === "done" && finalization && finalization.needsFinalAnswer && !finishReason?._backgroundFinalAnswerHandled) {
           renderer.beginFinalAnswerOnly();
           try {
             await client.request("session/prompt", {
@@ -1446,14 +1673,32 @@ class HermesSidebarProvider {
         }
       }
     } catch (error) {
+      if (error?.code === "HERMES_BACKGROUND_DISCONNECTED") {
+        if (this.disposing) {
+          detached = true;
+          return;
+        }
+        assistantMessage.status = "failed";
+        assistantMessage.finishedAt = Date.now();
+        assistantMessage.thinking.push({
+          kind: "error",
+          title: "Background host disconnected",
+          text: "Hermes stopped before the task was registered with the background host. Please retry the task."
+        });
+        await this.saveSessions();
+        this.postState();
+        return;
+      }
       if (lifecycle.cancelled) throw new TurnCancelledError();
       throw error;
     } finally {
-      lifecycle.settle();
-      await this.expirePermissionsForSession(session.id, { acpSessionId });
-      if (this.activeTurns.get(session.id) === turn) this.activeTurns.delete(session.id);
-      if (acpSessionId && this.acpRenderers.get(acpSessionId) === renderer) this.acpRenderers.delete(acpSessionId);
-      turn.release();
+      if (!detached) {
+        lifecycle.settle();
+        await this.expirePermissionsForSession(session.id, { acpSessionId });
+        if (this.activeTurns.get(session.id) === turn) this.activeTurns.delete(session.id);
+        if (acpSessionId && this.acpRenderers.get(acpSessionId) === renderer) this.acpRenderers.delete(acpSessionId);
+        turn.release();
+      }
     }
     if (lifecycle.cancelled) throw new TurnCancelledError();
     // The title generator can finish after the turn response. Refresh only
@@ -1461,6 +1706,7 @@ class HermesSidebarProvider {
     // history snapshot.
     await this.saveSessions();
     this.postState();
+    client.acknowledgeRun(backgroundRunId);
   }
 
   /** Best-effort compatibility alias for callers that only need fresh metadata. */
@@ -1472,15 +1718,200 @@ class HermesSidebarProvider {
     } catch { /* Older Hermes may not expose the snapshot extension method. */ }
   }
 
-  /** Lazily spawn `hermes acp` once and wire the session/update handler. */
+  async recoverBackgroundRuns() {
+    const config = vscode.workspace.getConfiguration("hermesAgent");
+    const command = config.get("command", "");
+    if (!command) return false;
+    const client = config.get("useAcp", true)
+      ? await this.ensureAcp(command)
+      : await this.ensureCliHost(command);
+    const snapshot = await client.snapshot();
+    const snapshotRunIds = new Set((snapshot?.runs || []).map(run => run?.runId).filter(Boolean));
+    for (const run of snapshot?.runs || []) {
+      if (!run?.runId || this.recoveredBackgroundRuns.has(run.runId)) continue;
+      const session = this.sessions.find(item => item.id === run.uiSessionId);
+      const assistantMessage = session?.messages?.find(message => message.id === run.assistantMessageId);
+      if (!session || !assistantMessage) continue;
+      this.recoveredBackgroundRuns.add(run.runId);
+      if (run.acpSessionId) {
+        this.acpSessions.set(session.id, run.acpSessionId);
+        session.acpSessionId = run.acpSessionId;
+      }
+      assistantMessage.text = "";
+      assistantMessage.thinking = [];
+      assistantMessage.status = "running";
+      delete assistantMessage.finishedAt;
+      if (run.transport === "cli") {
+        const cliTurn = this.createCliTurn(session, assistantMessage, run.runId, client);
+        this.cliTurns.set(session.id, cliTurn);
+        for (const event of run.events || []) this.handleCliEvent(run.runId, event);
+        if (["done", "failed", "interrupted"].includes(run.status)) {
+          this.finishCliTurn(cliTurn, run);
+          markSessionCompleted(session, {
+            visible: false,
+            completedAt: run.completedAt
+          });
+          this.cliTurns.delete(session.id);
+          client.acknowledgeRun(run.runId);
+        }
+        continue;
+      }
+      const renderer = createAcpRenderer({ assistantMessage, post: msg => this.post(msg), session });
+      this.acpRenderers.set(run.acpSessionId, renderer);
+      let finalAnswerOnly = false;
+      for (const event of run.events || []) {
+        if (!finalAnswerOnly && Number.isInteger(run.finalAnswerSeq) && event.seq > run.finalAnswerSeq) {
+          renderer.beginFinalAnswerOnly();
+          finalAnswerOnly = true;
+        }
+        renderer.onSessionUpdate(event.update || {});
+      }
+      if (!finalAnswerOnly && Number.isInteger(run.finalAnswerSeq)) renderer.beginFinalAnswerOnly();
+      if (["done", "failed", "interrupted"].includes(run.status)) {
+        renderer.finalize(run.status === "interrupted" ? "stopped" : run.status);
+        markSessionCompleted(session, {
+          visible: false,
+          completedAt: run.completedAt
+        });
+        this.acpRenderers.delete(run.acpSessionId);
+        client.acknowledgeRun(run.runId);
+      } else {
+        const lifecycle = new TurnLifecycle({ timeoutMs: 1500 });
+        const turn = {
+          lifecycle,
+          acpSessionId: run.acpSessionId,
+          uiSessionId: session.id,
+          assistantMessage,
+          client,
+          recovered: true,
+          lastSeq: Math.max(0, ...(run.events || []).map(event => Number(event.seq) || 0)),
+          finalAnswerOnly,
+          finalAnswerSeq: run.finalAnswerSeq,
+          released: Promise.resolve(),
+          release() {}
+        };
+        this.activeTurns.set(session.id, turn);
+      }
+    }
+    for (const session of this.sessions) {
+      for (const message of session.messages || []) {
+        if (message.role !== "assistant" || message.status !== "running" || !message.backgroundRunId) continue;
+        if (snapshotRunIds.has(message.backgroundRunId)) continue;
+        message.status = "stopped";
+        message.finishedAt = Date.now();
+      }
+    }
+    await this.saveSessions();
+    this.postState();
+    for (const session of this.sessions) {
+      if (!this.isSessionRunning(session.id)) await this.drainQueue(session.id);
+    }
+    return true;
+  }
+
+  async completeRecoveredBackgroundRun(run) {
+    if (run.transport === "cli") {
+      const cliTurn = [...this.cliTurns.values()].find(item => item.recovered && item.runId === run.runId);
+      if (!cliTurn) return false;
+      for (const event of run.events || []) {
+        if ((Number(event.seq) || 0) > cliTurn.lastSeq) this.handleCliEvent(run.runId, event);
+      }
+      this.finishCliTurn(cliTurn, run);
+      if (this.cliTurns.get(cliTurn.uiSessionId) === cliTurn) this.cliTurns.delete(cliTurn.uiSessionId);
+      await this.saveSessions();
+      this.postState();
+      cliTurn.client.acknowledgeRun(run.runId);
+      await this.drainQueue(cliTurn.uiSessionId);
+      return true;
+    }
+    const turn = [...this.activeTurns.values()].find(item => item.recovered && item.assistantMessage?.backgroundRunId === run.runId);
+    if (!turn) return false;
+    const renderer = this.acpRenderers.get(turn.acpSessionId);
+    if (renderer) {
+      for (const event of run.events || []) {
+        if ((Number(event.seq) || 0) <= turn.lastSeq) continue;
+        if (!turn.finalAnswerOnly && Number.isInteger(run.finalAnswerSeq) && event.seq > run.finalAnswerSeq) {
+          renderer.beginFinalAnswerOnly();
+          turn.finalAnswerOnly = true;
+        }
+        renderer.onSessionUpdate(event.update || {});
+        turn.lastSeq = Math.max(turn.lastSeq, Number(event.seq) || 0);
+      }
+      if (!turn.finalAnswerOnly && Number.isInteger(run.finalAnswerSeq)) renderer.beginFinalAnswerOnly();
+      renderer.finalize(run.status === "interrupted" ? "stopped" : run.status);
+    }
+    this.acpRenderers.delete(turn.acpSessionId);
+    if (this.activeTurns.get(turn.uiSessionId) === turn) this.activeTurns.delete(turn.uiSessionId);
+    turn.lifecycle.settle();
+    await this.saveSessions();
+    this.postState();
+    turn.client.acknowledgeRun(run.runId);
+    await this.drainQueue(turn.uiSessionId);
+    return true;
+  }
+
+  async ensureCliHost(command) {
+    if (this.cliClient) return this.cliClient;
+    let client;
+    client = new BackgroundClient({
+      command,
+      args: [],
+      cwd: this.workspaceCwd(),
+      storageDir: vscode.Uri.joinPath(this.context.globalStorageUri, "background-host").fsPath,
+      extensionRoot: this.context.extensionPath,
+      runtimeVersion: this.context.extension?.packageJSON?.version || "0.2.53",
+      resolveRuntime: () => this.backgroundNodeRuntime(),
+      handlers: {
+        onCliEvent: (runId, event) => this.handleCliEvent(runId, event),
+        onBackgroundRun: run => {
+          this.completeRecoveredBackgroundRun(run).catch(error => {
+            vscode.window.showWarningMessage(`Unable to restore Hermes background result: ${error.message}`);
+          });
+        },
+        onError: error => vscode.window.showWarningMessage(`Hermes background host: ${error.message}`),
+        onDisconnect: () => {
+          if (this.cliClient === client) this.cliClient = undefined;
+        }
+      }
+    });
+    await client.start();
+    this.cliClient = client;
+    return client;
+  }
+
+  /** Lazily connect to the VSIX-owned background host and wire ACP events. */
   async ensureAcp(command) {
     if (this.acp) return this.acp;
-    const client = new AcpClient({
+    if (this._ensureAcpPromise) return this._ensureAcpPromise;
+    const starting = this.startAcpClient(command);
+    this._ensureAcpPromise = starting;
+    try {
+      return await starting;
+    } finally {
+      if (this._ensureAcpPromise === starting) this._ensureAcpPromise = undefined;
+    }
+  }
+
+  async startAcpClient(command) {
+    const client = new BackgroundClient({
       command,
       args: ["acp"],
       cwd: this.workspaceCwd(),
+      storageDir: vscode.Uri.joinPath(this.context.globalStorageUri, "background-host").fsPath,
+      extensionRoot: this.context.extensionPath,
+      runtimeVersion: this.context.extension?.packageJSON?.version || "0.2.53",
+      resolveRuntime: () => this.backgroundNodeRuntime(),
       handlers: {
-        onSessionUpdate: (update, acpSessionId) => {
+        onFinalAnswerOnly: (_runId, acpSessionId, afterSeq) => {
+          this.acpRenderers.get(acpSessionId)?.beginFinalAnswerOnly();
+          const turn = [...this.activeTurns.values()].find(item => item.acpSessionId === acpSessionId);
+          if (turn?.recovered) {
+            turn.finalAnswerOnly = true;
+            turn.finalAnswerSeq = afterSeq;
+          }
+        },
+        onCliEvent: (runId, event) => this.handleCliEvent(runId, event),
+        onSessionUpdate: (update, acpSessionId, seq) => {
           if (this.retiredAcpSessions.has(acpSessionId)) return;
           if (update.sessionUpdate === "available_commands_update") {
             const available = update.availableCommands || update.available_commands || [];
@@ -1518,9 +1949,25 @@ class HermesSidebarProvider {
           this.expirePermissionFromSessionUpdate(update, acpSessionId);
           const renderer = this.acpRenderers.get(acpSessionId);
           if (renderer) renderer.onSessionUpdate(update);
+          const turn = [...this.activeTurns.values()].find(item => item.recovered && item.acpSessionId === acpSessionId);
+          if (turn) turn.lastSeq = Math.max(turn.lastSeq || 0, Number(seq) || 0);
         },
         onError: err => {
           vscode.window.showWarningMessage(`Hermes ACP: ${err.message}`);
+        },
+        onBackgroundRun: run => {
+          this.completeRecoveredBackgroundRun(run).catch(error => {
+            vscode.window.showWarningMessage(`Unable to restore Hermes background result: ${error.message}`);
+          });
+        },
+        onDisconnect: () => {
+          if (this.acp === client) this.acp = undefined;
+        },
+        onHostMigrated: async () => {
+          this.acpSessions.clear();
+          this.acpAvailableCommands.clear();
+          this.acpCommandCaptures.clear();
+          await client.request("initialize", ACP_INITIALIZE_PARAMS);
         },
         onPermissionRequest: request => {
           const params = request.params || {};
@@ -1533,7 +1980,8 @@ class HermesSidebarProvider {
           const options = Array.isArray(params.options) ? params.options : [];
           const allow = options.find(option => option.optionId === "allow_once" || option.optionId === "allow");
           const deny = options.find(option => option.optionId === "deny" || option.optionId === "reject_once");
-          const uiSessionId = [...this.acpSessions].find(([, value]) => value === sessionId)?.[0];
+          const uiSessionId = [...this.acpSessions].find(([, value]) => value === sessionId)?.[0]
+            || this.sessions.find(session => session.messages?.some(message => message.backgroundRunId === request._backgroundRunId))?.id;
           const mode = this.activeSession(uiSessionId).settings?.mode || "Auto";
           // Manual mode: always ask. Auto mode: auto-approve.
           // File write/edit/delete tools must ALWAYS confirm in Manual mode.
@@ -1635,11 +2083,7 @@ class HermesSidebarProvider {
     this._startingAcp = client;
     try {
       await client.start();
-      await client.request("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: {},
-        clientInfo: { name: "hermes-agent-vscode", version: "0.2.54" }
-      });
+      await client.request("initialize", ACP_INITIALIZE_PARAMS);
     } catch (err) {
       client.intentionalStop = true;
       await client.killAndWait(1000);
@@ -2741,17 +3185,12 @@ class HermesSidebarProvider {
 
   dispose() {
     if (this._disposePromise) return this._disposePromise;
+    this.disposing = true;
     this._disposePromise = (async () => {
       this.clearPermissionReminder();
       this.permissionSessionGrants.clear();
       this.permissionBatchState.clear();
-      if (this.pendingPermission) {
-        this.pendingPermission.client.respond(this.pendingPermission.request.id, { outcome: { outcome: "cancelled" } });
-        this.pendingPermission = undefined;
-      }
-      for (const pending of this.permissionQueue) {
-        pending.client.respond(pending.request.id, { outcome: { outcome: "cancelled" } });
-      }
+      this.pendingPermission = undefined;
       this.permissionQueue = [];
       if (this._diffPreviewPromise) await this._diffPreviewPromise;
       const cleaned = await this.rollbackDocDiffPreview();
@@ -2759,17 +3198,23 @@ class HermesSidebarProvider {
       this.disposeDocDiffUi();
       this.diffPreviewDocuments.clear();
       this._diffPreviewPromise = undefined;
-      await Promise.all([...this.cliTurns.values()].map(turn => this.terminateProcess(turn.child)));
-      this.cliTurns.clear();
+      const panel = [...this.panels].find(item => item.sessionId) || [...this.panels][0];
+      await this.saveWorkspaceAgentState(panel ? {
+        editorPanelOpen: true,
+        editorSessionId: panel.sessionId,
+        editorColumn: panel.viewColumn
+      } : {});
       const clients = new Set([
         this.acp,
+        this.cliClient,
         this._startingAcp,
         ...[...this.activeTurns.values()].map(turn => turn.client)
       ].filter(Boolean));
       for (const client of clients) {
-        client.intentionalStop = true;
-        await client.killAndWait(1000);
+        client.disconnect();
       }
+      await this.saveSessions();
+      await this._queueSave;
     })();
     return this._disposePromise;
   }
@@ -2813,110 +3258,124 @@ class HermesSidebarProvider {
     }
   }
 
+  createCliTurn(session, assistantMessage, runId, client, recovered = true) {
+    const pushThinking = () => {
+      if (assistantMessage.status !== "running") return;
+      this.post({ type: "thinkingUpdate", sessionId: session.id, messageId: assistantMessage.id, thinking: assistantMessage.thinking.map(step => ({ ...step })) });
+    };
+    const parser = createChatParser({
+      onThinkingEnd: text => {
+        if (assistantMessage.status !== "running") return;
+        assistantMessage.thinking.push({ kind: "thinking", title: "Thinking", text: text.slice(0, 2000) });
+        pushThinking();
+      },
+      onTool: tool => {
+        if (assistantMessage.status !== "running") return;
+        assistantMessage.thinking.push({ kind: "tool", title: tool.name, summary: tool.summary || tool.name, code: tool.code || "", result: tool.result || "", done: tool.done, status: tool.status || "pending" });
+        pushThinking();
+      },
+      onToolUpdate: tool => {
+        if (assistantMessage.status !== "running") return;
+        for (let index = assistantMessage.thinking.length - 1; index >= 0; index -= 1) {
+          const step = assistantMessage.thinking[index];
+          if (step.kind === "tool" && step.title === tool.name) {
+            step.result = tool.result || "";
+            step.done = tool.done;
+            step.status = tool.status || step.status;
+            break;
+          }
+        }
+        pushThinking();
+      },
+      onAnswerLine: line => {
+        if (assistantMessage.status !== "running") return;
+        assistantMessage.text += `${line}\n`;
+        this.post({ type: "assistantChunk", sessionId: session.id, messageId: assistantMessage.id, chunk: `${line}\n` });
+      }
+    });
+    return { runId, uiSessionId: session.id, assistantMessage, parser, client, recovered, lastSeq: 0 };
+  }
+
+  handleCliEvent(runId, event) {
+    const turn = [...this.cliTurns.values()].find(item => item.runId === runId);
+    if (!turn || turn.assistantMessage.status !== "running") return;
+    turn.lastSeq = Math.max(turn.lastSeq || 0, Number(event.seq) || 0);
+    if (event.kind === "stdout") {
+      turn.parser.onChunk(String(event.chunk || ""));
+      return;
+    }
+    const chunk = String(event.chunk || "");
+    if (event.kind === "error") {
+      turn.assistantMessage.thinking.push({ kind: "error", title: "Hermes CLI unavailable", text: chunk.slice(0, 2000) });
+    } else if (event.kind === "stderr" && /\[ERROR\]|\[CRITICAL\]|Traceback|^Error:|FATAL/i.test(chunk)) {
+      const existing = [...turn.assistantMessage.thinking].reverse().find(step => step.kind === "error" && step.title === "stderr");
+      if (existing) existing.text = `${existing.text}${existing.text ? "\n" : ""}${chunk.trim()}`.slice(-4000);
+      else turn.assistantMessage.thinking.push({ kind: "error", title: "stderr", text: chunk.trim().slice(0, 2000) });
+    } else {
+      return;
+    }
+    this.post({ type: "thinkingUpdate", sessionId: turn.uiSessionId, messageId: turn.assistantMessage.id, thinking: turn.assistantMessage.thinking.map(step => ({ ...step })) });
+  }
+
+  finishCliTurn(turn, result) {
+    if (turn.assistantMessage.status !== "running") return;
+    turn.parser.flush();
+    turn.assistantMessage.status = result.status === "interrupted" ? "stopped" : result.status;
+    turn.assistantMessage.finishedAt = result.completedAt || Date.now();
+    if (result.status === "failed") {
+      turn.assistantMessage.thinking.push({ kind: "error", title: "Failed", text: `Process exited with code ${result.exitCode}.` });
+    }
+  }
+
   async runCli(command, args, prompt, userMessage, assistantMessage, sessionId) {
     const session = this.activeSession(sessionId);
     const composedPrompt = composeHermesPrompt(prompt, userMessage);
     const invocationArgs = buildInvocationArgs(args, composedPrompt);
-    const usesPromptPlaceholder = invocationArgs.usedPlaceholder;
-    await new Promise(resolve => {
-      const child = spawn(command, invocationArgs.args, {
-        cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-        env: {
-          ...process.env,
-          HERMES_ACCEPT_HOOKS: "1"
-        },
-        shell: process.platform === "win32"
-      });
-      const cliTurn = { child, assistantMessage };
-      this.cliTurns.set(session.id, cliTurn);
-      // Parse `hermes chat -q ... -v` output: reasoning blocks become
-      // thinking steps, `📞 Tool N` calls become tool steps, and the
-      // final `╭─ Hermes ╮` block streams as the answer text.
-      const pushThinking = () => {
-        if (assistantMessage.status !== "running") return;
-        this.post({ type: "thinkingUpdate", sessionId: session.id, messageId: assistantMessage.id, thinking: assistantMessage.thinking.map(step => ({ ...step })) });
-      };
-      const parser = createChatParser({
-        onThinkingEnd: text => {
-          if (assistantMessage.status !== "running") return;
-          // Converge reasoning to a readable head; the frontend expands it.
-          assistantMessage.thinking.push({ kind: "thinking", title: "Thinking", text: text.slice(0, 2000) });
-          pushThinking();
-        },
-        onTool: tool => {
-          if (assistantMessage.status !== "running") return;
-          assistantMessage.thinking.push({ kind: "tool", title: tool.name, summary: tool.summary || tool.name, code: tool.code || "", result: tool.result || "", done: tool.done, status: tool.status || "pending" });
-          pushThinking();
-        },
-        onToolUpdate: tool => {
-          if (assistantMessage.status !== "running") return;
-          const steps = assistantMessage.thinking;
-          for (let index = steps.length - 1; index >= 0; index -= 1) {
-            if (steps[index].kind === "tool" && steps[index].title === tool.name) {
-              steps[index].result = tool.result || "";
-              steps[index].done = tool.done;
-              steps[index].status = tool.status || steps[index].status;
-              break;
-            }
-          }
-          pushThinking();
-        },
-        onAnswerLine: line => {
-          if (assistantMessage.status !== "running") return;
-          assistantMessage.text += `${line}\n`;
-          this.post({ type: "assistantChunk", sessionId: session.id, messageId: assistantMessage.id, chunk: `${line}\n` });
+    const runId = assistantMessage.backgroundRunId || id();
+    assistantMessage.backgroundRunId = runId;
+    await this.saveSessions();
+    const client = await this.ensureCliHost(command);
+    const cliTurn = this.createCliTurn(session, assistantMessage, runId, client, false);
+    this.cliTurns.set(session.id, cliTurn);
+    let detached = false;
+    try {
+      const result = await client.runCli({
+        command,
+        args: invocationArgs.args,
+        cwd: this.workspaceCwd(),
+        env: { HERMES_ACCEPT_HOOKS: "1" },
+        stdin: invocationArgs.usedPlaceholder ? "" : composedPrompt,
+        metadata: {
+          runId,
+          uiSessionId: session.id,
+          userMessageId: userMessage.id,
+          assistantMessageId: assistantMessage.id,
+          mode: session.settings?.mode || "Auto"
         }
       });
-      child.stdout.on("data", data => {
-        if (assistantMessage.status === "running") parser.onChunk(data.toString());
-      });
-      child.stdout.on("end", () => {
-        if (assistantMessage.status === "running") parser.flush();
-      });
-      child.stderr.on("data", data => {
-        if (assistantMessage.status !== "running") return;
-        const chunk = data.toString();
-        // Only genuine failures reach the timeline (same policy as the ACP
-        // path): INFO/WARNING chatter from hermes internals is noise.
-        if (!/\[ERROR\]|\[CRITICAL\]|Traceback|^Error:|FATAL/i.test(chunk)) return;
-        // Converge stderr into a single error step instead of one row per
-        // line — a verbose CLI shouldn't flood the working timeline.
-        const existing = [...assistantMessage.thinking].reverse().find(step => step.kind === "error" && step.title === "stderr");
-        if (existing) {
-          existing.text = `${existing.text}${existing.text ? "\n" : ""}${chunk.trim()}`.slice(-4000);
-        } else {
-          assistantMessage.thinking.push({ kind: "error", title: "stderr", text: chunk.trim().slice(0, 2000) });
-        }
-        pushThinking();
-      });
-      child.on("error", error => {
-        if (assistantMessage.status === "stopped") return;
-        assistantMessage.status = "failed";
-        assistantMessage.finishedAt = Date.now();
-        assistantMessage.text += `Hermes CLI failed to start: ${error.message}`;
-        assistantMessage.thinking.push({ kind: "error", title: "Hermes CLI unavailable", text: error.message });
-        if (this.cliTurns.get(session.id) === cliTurn) this.cliTurns.delete(session.id);
-        this.saveSessions().then(() => this.postState()).then(resolve);
-      });
-      child.on("close", code => {
-        if (assistantMessage.status === "failed") return;
-        if (assistantMessage.status === "stopped") {
-          if (this.cliTurns.get(session.id) === cliTurn) this.cliTurns.delete(session.id);
-          resolve();
+      this.finishCliTurn(cliTurn, { ...result, exitCode: result.code, completedAt: Date.now() });
+      client.acknowledgeRun(runId);
+    } catch (error) {
+      if (error?.code === "HERMES_BACKGROUND_DISCONNECTED") {
+        if (this.disposing) {
+          detached = true;
           return;
         }
-        assistantMessage.status = code === 0 ? "done" : "failed";
+        assistantMessage.status = "failed";
         assistantMessage.finishedAt = Date.now();
-        if (code !== 0) {
-          // A clean exit needs no celebratory step — success is already
-          // visible via the ✓ badges on each tool row.
-          assistantMessage.thinking.push({ kind: "error", title: "Failed", text: `Process exited with code ${code}.` });
-        }
-        if (this.cliTurns.get(session.id) === cliTurn) this.cliTurns.delete(session.id);
-        this.saveSessions().then(() => this.postState()).then(resolve);
-      });
-      child.stdin.end(usesPromptPlaceholder ? "" : composedPrompt);
-    });
+        assistantMessage.thinking.push({
+          kind: "error",
+          title: "Background host disconnected",
+          text: "Hermes stopped before the task completed. Please retry the task."
+        });
+        return;
+      }
+      throw error;
+    } finally {
+      if (!detached && this.cliTurns.get(session.id) === cliTurn) this.cliTurns.delete(session.id);
+      await this.saveSessions();
+      this.postState();
+    }
   }
 
   async stop(sessionId = this.activeSessionId) {
@@ -2924,24 +3383,27 @@ class HermesSidebarProvider {
     const last = [...session.messages].reverse().find(message => message.role === "assistant" && message.status === "running");
     const cliTurn = this.cliTurns.get(session.id);
     if (cliTurn) {
-      const child = cliTurn.child;
       if (last) {
         last.status = "stopped";
         last.finishedAt = Date.now();
       }
-      const stopping = this.terminateProcess(child);
+      const stopping = cliTurn.client.cancelCli(cliTurn.runId);
       this._stoppingPromise = stopping;
       await this.saveSessions();
       this.postState();
+      let terminated = false;
       try {
-        await stopping;
+        terminated = await stopping;
+        if (!terminated) {
+          vscode.window.showErrorMessage("Hermes CLI could not be terminated. New questions remain blocked until Stop succeeds.");
+        }
       } finally {
-        if (this.cliTurns.get(session.id) === cliTurn) this.cliTurns.delete(session.id);
+        if (terminated && this.cliTurns.get(session.id) === cliTurn) this.cliTurns.delete(session.id);
         if (this._stoppingPromise === stopping) this._stoppingPromise = null;
       }
       this.promptQueue.clear(session.id);
       this.postState();
-      return true;
+      return terminated;
     }
     const acpTurn = this.activeTurns.get(session.id);
     if (acpTurn?.client && acpTurn.acpSessionId) {
@@ -2988,6 +3450,7 @@ class HermesSidebarProvider {
   }
 
   postState() {
+    if (this.trackSessionCompletionTransitions()) void this.saveSessions();
     this.updatePanelTitles();
     this.view?.webview.postMessage(this.stateMessage(this.activeSessionId));
     for (const panel of this.panels) {
@@ -3032,7 +3495,7 @@ class HermesSidebarProvider {
         mode: sessionSettings.mode || config.get("defaultMode", "Auto"),
         model: selectedModel,
         reasoningByModel: sessionSettings.reasoningByModel || {},
-        reasoningEffortSupported: Boolean(session.reasoningEffortSupported),
+        reasoningEffortSupported: Boolean(selectedModel),
         modelRefreshStatus: session.modelRefreshStatus || "idle",
         skills: merged,
         commands
@@ -3151,6 +3614,20 @@ function lastModel(ctx, fallback = "") {
 function saveLastModel(ctx, model) {
   try {
     return ctx.globalState.update(MODEL_KEY, String(model || ""));
+  } catch { /* best-effort */ }
+}
+
+const REASONING_BY_MODEL_KEY = "hermesAgent.lastReasoningByModel";
+function lastReasoningByModel(ctx) {
+  try {
+    return normalizeReasoningByModel(ctx.globalState.get(REASONING_BY_MODEL_KEY, {}));
+  } catch {
+    return {};
+  }
+}
+function saveLastReasoningByModel(ctx, reasoningByModel) {
+  try {
+    return ctx.globalState.update(REASONING_BY_MODEL_KEY, normalizeReasoningByModel(reasoningByModel));
   } catch { /* best-effort */ }
 }
 

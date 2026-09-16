@@ -1,6 +1,6 @@
 # Hermes Agent for VS Code
 
-Bring [Hermes Agent](https://github.com/NousResearch/hermes-agent) into the editor where the work already lives. Hermes Agent for VS Code combines editor-aware context, visible agent execution, reusable skills, persistent memory, and session controls in one focused workspace.
+Bring [Hermes Agent](https://github.com/NousResearch/hermes-agent) into the editor where the work already lives. Hermes Agent for VS Code combines editor-aware context, visible agent execution, reusable skills, persistent memory, session continuity, and run controls in one focused workspace.
 
 ## Why Hermes Agent for VS Code
 
@@ -18,13 +18,19 @@ Follow long-running work through structured Thinking and Action records rather t
 
 ### A persistent agent workspace
 
-Sessions preserve the flow of a project, while editable personality, memory, and reusable skills let Hermes carry stable working preferences across tasks. Model and approval-mode controls stay close to the composer so each run can match the level of autonomy you want.
+Sessions preserve the flow of a project, while editable personality, memory, and reusable skills let Hermes carry stable working preferences across tasks. Model, reasoning-effort, and approval-mode controls stay close to the composer so each run can match the level of autonomy you want.
 
 ![Hermes Agent personality, memory, attachments, and skill controls](https://raw.githubusercontent.com/eyan-ai/hermes-agent-vs-code/main/docs/images/hermes-memory-and-skills.jpeg)
 
 Start a clean session directly from the editor whenever a task needs a fresh context, then continue with the same editor-aware composer and workspace tools.
 
 ![Quick new-session entry point and editor-aware composer](https://raw.githubusercontent.com/eyan-ai/hermes-agent-vs-code/main/docs/images/hermes-quick-new-session.jpeg)
+
+### Background session continuity
+
+Active Auto-mode tasks can continue in a standalone background host after VS Code closes. Reopening the same workspace restores the previous Agent workspace and session, including structured Thinking, Actions, and the final response. History shows running sessions and marks completed sessions that have not yet been viewed.
+
+This capability requires a standalone Node.js installation. The extension can detect Node.js automatically, or you can set an explicit executable with `hermesAgent.nodePath`. Closing the computer, signing out of the operating system, or terminating the standalone Node.js process stops the background session.
 
 ## Feature overview
 
@@ -36,25 +42,29 @@ Start a clean session directly from the editor whenever a task needs a fresh con
 - Slash commands, reusable skills, Queue, and Steer workflows.
 - Approval, Diff, and document-review flows for sensitive changes.
 - Immediate Stop controls with isolated turn cancellation.
-- Session history with rename, delete, and quick new-session actions.
+- Session history with running and unseen-completion indicators, rename, delete, and quick new-session actions.
+- Workspace and Editor Session restoration when the same VS Code workspace reopens.
+- Background task continuation after VS Code closes when standalone Node.js is installed.
 - Persistent personality and memory documents.
-- Run settings for approval mode and model selection.
+- Run settings for approval mode, model selection, and per-model reasoning effort.
 - Enter to send and Shift+Enter for a new line.
 
 ## Hermes CLI Integration
 
-By default, the extension calls the local Hermes CLI:
+The extension requires a local [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI installation. ACP is the default transport for structured Thinking, Actions, permissions, model controls, and resumable session state. Install Hermes with ACP support and keep the `hermes` command available on your `PATH`.
+
+Background session continuity also requires a standalone Node.js installation. The extension automatically checks common Node.js locations; use `hermesAgent.nodePath` when Node.js is installed somewhere else.
+
+The CLI fallback remains configurable through `hermesAgent.commandArgs`:
 
 ```json
 {
   "hermesAgent.command": "hermes",
-  "hermesAgent.commandArgs": ["--oneshot", "{{prompt}}"]
+  "hermesAgent.commandArgs": ["chat", "-q", "{{prompt}}", "-v"]
 }
 ```
 
-The extension composes the user prompt, selected skill, attachments, and current editor context into one text prompt, then replaces `{{prompt}}` in `hermesAgent.commandArgs`.
-
-Anything written to stdout is appended into the assistant message. If `hermesAgent.command` is empty, the extension falls back to a local preview response.
+The extension sends the user prompt, selected skill, attachments, and current editor context to Hermes. If ACP is unavailable or disabled, the configured CLI fallback streams Hermes output into the same conversation UI. If `hermesAgent.command` is empty, the extension uses a local preview response instead of starting Hermes.
 
 ## Community project notice
 

@@ -72,6 +72,12 @@ function reasoningLabel(value) {
   return reasoningEfforts.find(option => option.value === value)?.label || "Default";
 }
 
+function compactReasoningLabel(value) {
+  const label = reasoningLabel(value);
+  if (label === "Medium") return "Med";
+  return label === "Extra High" ? "XHigh" : label;
+}
+
 const icons = {
   history: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>',
   add: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>',
@@ -363,13 +369,15 @@ function displayTitle(session) {
   return "Untitled";
 }
 
-function manualTitleMarker(session) {
-  if (session?.titleOrigin !== "manual") return "";
-  return `<span class="title-origin-marker" title="Manually edited in VS Code" aria-label="Manually edited in VS Code">edited</span>`;
+function renderedTitle(session) {
+  return `<span class="title-value">${h(displayTitle(session))}</span>`;
 }
 
-function renderedTitle(session) {
-  return `${manualTitleMarker(session)}<span class="title-value">${h(displayTitle(session))}</span>`;
+function sessionStatusMarker(session) {
+  const running = (session?.messages || []).some(message => message.role === "assistant" && message.status === "running");
+  if (running) return `<span class="session-status running" role="img" aria-label="Running" title="Running"></span>`;
+  if (session?.completedPendingViewAt) return `<span class="session-status completed" role="img" aria-label="Completed" title="Completed"></span>`;
+  return "";
 }
 
 function ageLabel(session) {
@@ -601,11 +609,16 @@ function bindScrollWatch() {
   scrollHandlerBound = true;
   document.addEventListener("wheel", event => {
     const el = event.target?.closest?.(".scroll");
-    if (!el || event.deltaY >= 0) return;
+    if (!el) return;
+    if (event.target?.closest?.(".thinking-step-running")) {
+      event.preventDefault();
+      el.scrollTop += event.deltaY;
+    }
+    if (event.deltaY >= 0) return;
     state.userScrolledUp = true;
     state.pinBottom = false;
     updateJumpToLatest();
-  }, { capture: true, passive: true });
+  }, { capture: true, passive: false });
   document.addEventListener("scroll", event => {
     if (state.modelPickerOpen || state.effortPickerOpen) positionOpenPicker();
     const el = event.target;
@@ -723,7 +736,7 @@ function renderHistoryItems() {
     return `<div class="history-item ${session.id === state.activeSessionId ? "active" : ""} ${renaming ? "renaming" : ""}" data-session="${session.id}">
       ${renaming
         ? `<input class="history-rename" maxlength="64" value="${h(title)}">`
-        : `<span class="history-name">${manualTitleMarker(active || session)}<span class="history-name-text">${h(displayTitle(active || session))}</span></span>`}
+        : `<span class="history-name">${sessionStatusMarker(active || session)}<span class="history-name-text">${h(displayTitle(active || session))}</span></span>`}
       <span class="history-age">${ageLabel(session)}</span>
       <span class="history-actions">
         ${renaming ? "" : `<button class="history-action rename-history" type="button">${icons.edit}</button>`}
@@ -1000,7 +1013,7 @@ function renderPopovers() {
             <span class="model-label">Model</span>
             <div class="model-combobox ${state.modelPickerOpen ? "open" : ""}">
               <span class="model-combobox-copy">
-                <input id="modelPickerInput" role="combobox" aria-autocomplete="list" aria-controls="modelList" aria-expanded="${state.modelPickerOpen}" autocomplete="off" spellcheck="false" value="${h(state.modelPickerOpen ? state.modelQuery : (selectedModel?.name || "Current Hermes model"))}" ${state.models.length ? "" : "disabled"}>
+                <input id="modelPickerInput" role="combobox" aria-autocomplete="list" aria-controls="modelList" aria-expanded="${state.modelPickerOpen}" autocomplete="off" spellcheck="false" value="${h(state.modelPickerOpen ? state.modelQuery : (HermesModelPicker.displayModelName(selectedModel) || "Current Hermes model"))}" ${state.models.length ? "" : "disabled"}>
                 <small id="modelPickerDescription">${h(selectedModel?.description || "")}</small>
               </span>
               ${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}
@@ -1045,7 +1058,7 @@ function renderModelOverlay() {
       const selected = state.settings.model === model.id;
       return `<div class="model-option ${selected ? "selected" : ""} ${index === state.modelFocusIndex ? "focused" : ""} ${model.unavailable ? "unavailable" : ""}" id="modelOption-${index}" role="option" aria-selected="${selected}" aria-disabled="${Boolean(model.unavailable)}" tabindex="-1" data-model-index="${index}" data-model-id="${h(model.id)}">
         <button class="model-option-main" type="button" data-model-id="${h(model.id)}" ${model.unavailable ? "disabled" : ""}>
-          <span class="model-option-copy"><strong>${h(model.name || model.id)}</strong><small>${h(model.description || "")}</small></span>
+          <span class="model-option-copy"><strong>${h(HermesModelPicker.displayModelName(model))}</strong><small>${h(model.description || "")}</small></span>
           <span class="model-option-meta">${model.unavailable ? "Unavailable" : selected ? "✓" : ""}</span>
         </button>
       </div>`;
@@ -1150,7 +1163,8 @@ function positionOpenPicker() {
     viewportHeight: window.innerHeight,
     contentHeight: list.scrollHeight,
     maxListHeight: 250,
-    margin: 8
+    margin: 8,
+    forceAbove: state.modelPickerOpen
   });
   state.modelPlacement = placement;
   list.classList.toggle("opens-up", placement.direction === "up");
@@ -1316,15 +1330,24 @@ function renderPromptLine(running, contextChip) {
   const token = selectedToken();
   const placeholder = token ? "" : "Do anything. Use @context or /command";
   const hasContent = canSubmit();
+  const settingsSummary = runSettingsSummary();
   return `<div>
     <div class="input-line prompt" id="prompt" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="${placeholder}">${token ? `<span class="prompt-token" contenteditable="false" data-token-type="${h(token.type)}">${h(token.name)}</span> ` : ""}${h(state.draft)}</div>
     <div class="toolbar">
       <button class="tool-btn plus-btn" id="pickBtn" type="button" title="Add files or folders" aria-label="Add files or folders">${icons.add}</button>
       <div class="context-strip">${contextChip}</div>
-      <button class="tool-btn" id="modeBtn" type="button" title="Run settings"><span class="mode-label">${h(state.settings.mode)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
+      <button class="tool-btn" id="modeBtn" type="button" title="${h(settingsSummary.full)}"><span class="mode-label">${h(settingsSummary.compact)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
       <button class="send ${running || canSubmit() ? "ready" : ""} ${running && !hasContent ? "stop" : ""}" id="sendBtn" type="button">${running && !hasContent ? icons.stop : icons.send}</button>
     </div>
   </div>`;
+}
+
+function runSettingsSummary() {
+  const selectedModel = state.models.find(model => model.id === state.settings.model);
+  const model = HermesModelPicker.displayModelName(selectedModel) || state.settings.model || "Model";
+  const effort = compactReasoningLabel(state.settings.reasoningByModel?.[state.settings.model]);
+  const full = `${state.settings.mode} · ${model} · ${effort}`;
+  return { compact: full, full };
 }
 
 function renderPermissionInside() {
@@ -2072,7 +2095,8 @@ window.addEventListener("message", event => {
       modelRefreshStatus: state.settings.modelRefreshStatus,
       models: state.models
     });
-    const hadStructuralOverlay = state.historyOpen || state.memoryOpen || state.titleEditing || Boolean(state.renamingSessionId);
+    const renameInProgress = state.titleEditing || Boolean(state.renamingSessionId);
+    const hadStructuralOverlay = state.historyOpen || state.memoryOpen || renameInProgress;
     const forceSubmissionBottom = acknowledgePendingSubmissionScroll(
       message.sessions || [],
       message.activeSessionId,
@@ -2110,7 +2134,7 @@ window.addEventListener("message", event => {
       || permissionChanged
       || composerReset
       || settingsUiChanged
-      || hadStructuralOverlay;
+      || (hadStructuralOverlay && !renameInProgress);
     if (needsFullRender) {
       if (state.renamingSessionId && !state.sessions.some(session => session.id === state.renamingSessionId)) {
         delete state.renameDrafts[state.renamingSessionId];
