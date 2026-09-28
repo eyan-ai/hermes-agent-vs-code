@@ -124,6 +124,16 @@
           "default": "Auto",
           "description": "Default approval mode for new sessions."
         },
+        "hermesAgent.sendKey": {
+          "type": "string",
+          "enum": [
+            "Enter",
+            "Ctrl+Enter",
+            "Cmd+Enter"
+          ],
+          "default": "Enter",
+          "description": "Key combination that sends a message from the composer. Enter sends immediately (Shift+Enter inserts a newline); Ctrl+Enter / Cmd+Enter keep plain Enter for newlines."
+        },
         "hermesAgent.model": {
           "type": "string",
           "default": "deepseek-v4-flash",

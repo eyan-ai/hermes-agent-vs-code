@@ -3493,6 +3493,7 @@ class HermesSidebarProvider {
       sessions: this.sessions,
       settings: {
         mode: sessionSettings.mode || config.get("defaultMode", "Auto"),
+        sendKey: config.get("sendKey", "Enter"),
         model: selectedModel,
         reasoningByModel: sessionSettings.reasoningByModel || {},
         reasoningEffortSupported: Boolean(selectedModel),

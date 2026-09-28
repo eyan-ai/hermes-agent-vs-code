@@ -1553,6 +1553,16 @@ function bindHistoryItems(root = document) {
   });
 }
 
+// Send-key predicate: "Enter" (default) sends on plain Enter;
+// "Ctrl+Enter" / "Cmd+Enter" require the modifier so that a plain
+// Enter inserts a newline instead.
+function matchesSendKey(event, sendKey) {
+  if (event.key !== "Enter") return false;
+  if (sendKey === "Ctrl+Enter") return event.ctrlKey && !event.metaKey;
+  if (sendKey === "Cmd+Enter") return event.metaKey && !event.ctrlKey;
+  return true;
+}
+
 function bind() {
   bindConversationRegion();
   bindAccessoryRegion();
@@ -1763,7 +1773,7 @@ function bind() {
         document.querySelector(".command-option.active")?.scrollIntoView({ block: "nearest" });
         return;
       }
-      if ((event.key === "Enter" || event.key === "Tab") && options.length && !event.isComposing) {
+      if (((event.key === "Enter" && matchesSendKey(event, state.settings.sendKey)) || event.key === "Tab") && options.length && !event.isComposing) {
         event.preventDefault();
         selectCommandOption(options[state._commandIndex || 0]);
         return;
@@ -1785,7 +1795,7 @@ function bind() {
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    if (matchesSendKey(event, state.settings.sendKey) && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       submit();
     }
