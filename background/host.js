@@ -390,6 +390,7 @@ class BackgroundHost {
       cwd: input.cwd,
       env: { ...process.env, ...(input.env || {}) },
       shell: process.platform === "win32",
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.cliProcesses.set(run.runId, { child, run });
