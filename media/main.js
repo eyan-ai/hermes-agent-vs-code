@@ -46,10 +46,12 @@ const state = {
   todosOpen: false,
   userScrolledUp: false,
   pinBottom: false,
+  suppressRepinUntil: 0,
   pendingSubmissionScrollIntent: null,
   expandedUserMessages: {},
   settings: {
     mode: "Auto",
+    enterToSend: true,
     model: "",
     reasoningByModel: {},
     reasoningEffortSupported: false,
@@ -78,6 +80,26 @@ function compactReasoningLabel(value) {
   return label === "Extra High" ? "XHigh" : label;
 }
 
+function platformUsesMetaKey(platform) {
+  return /mac|iphone|ipad|ipod/i.test(String(platform || ""));
+}
+
+function modifiedSendShortcutLabel(platform) {
+  return platformUsesMetaKey(platform) ? "⌘ + Enter" : "Ctrl + Enter";
+}
+
+function isSendShortcut(event, enterToSend, platform) {
+  if (event.key !== "Enter" || event.isComposing) return false;
+  const shift = Boolean(event.shiftKey);
+  const meta = Boolean(event.metaKey);
+  const ctrl = Boolean(event.ctrlKey);
+  const alt = Boolean(event.altKey);
+  if (enterToSend !== false) return !shift && !meta && !ctrl && !alt;
+  return platformUsesMetaKey(platform)
+    ? meta && !shift && !ctrl && !alt
+    : ctrl && !shift && !meta && !alt;
+}
+
 const icons = {
   history: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>',
   add: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>',
@@ -89,7 +111,10 @@ const icons = {
   send: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
   stop: '<svg class="icon" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>',
   search: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
-  bolt: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m13 2-9 14h8l-1 6 9-14h-8z"/></svg>',
+  bolt: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 4 12h8l-1 9 9-9h-8Z"/></svg>',
+  manual: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11V6.5a1.5 1.5 0 0 1 3 0V10"/><path d="M11 10V5a1.5 1.5 0 0 1 3 0v5"/><path d="M14 10V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M17 11V9a1.5 1.5 0 0 1 3 0v5a7 7 0 0 1-7 7h-1.2a7 7 0 0 1-5.6-2.8l-2.8-3.7a1.5 1.5 0 0 1 2.3-1.9L8 14.5Z"/></svg>',
+  contextIncluded: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.6 2.6L16.5 9"/></svg>',
+  contextExcluded: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/></svg>',
   gear: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .6V20a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-.6 1.8 1.8 0 0 0-1.98.36l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-.6-1H4a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 .6-1 1.8 1.8 0 0 0-.36-1.98l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.8 1.8 0 0 0 9 4.6a1.8 1.8 0 0 0 1-.6V4a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 .6 1.8 1.8 0 0 0 1.98-.36l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.8 1.8 0 0 0 19.4 9c.2.35.4.65.6 1h.1a2 2 0 1 1 0 4H20a1.8 1.8 0 0 0-.6 1Z"/></svg>',
   copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
   branch: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 6h3a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3"/><path d="M6 8v10"/></svg>',
@@ -108,6 +133,205 @@ function h(value) {
     '"': "&quot;",
     "'": "&#39;"
   }[char]));
+}
+
+function modeIcon(mode) {
+  return mode === "Manual" ? icons.manual : icons.bolt;
+}
+
+function documentNameFor(item) {
+  if (!item) return "Document";
+  if (item.type !== "selection" && item.name) return item.name;
+  const source = String(item.path || item.uri || "").split(/[?#]/, 1)[0];
+  const basename = source.split(/[\\/]/).filter(Boolean).pop();
+  if (basename) {
+    try {
+      return decodeURIComponent(basename);
+    } catch {
+      return basename;
+    }
+  }
+  return item.name || "Document";
+}
+
+function richTooltipAttributes({ title = "", kind = "", name, tone = "", variant = "context" }) {
+  return `data-rich-tooltip="true" data-tooltip-title="${h(title)}" data-tooltip-kind="${h(kind)}" data-tooltip-name="${h(name)}" data-tooltip-tone="${h(tone)}" data-tooltip-variant="${h(variant)}" aria-describedby="richTooltip"`;
+}
+
+function contextTooltipData(context) {
+  const included = !state.contextMuted;
+  const selection = context?.type === "selection";
+  return {
+    title: included ? "Context included" : "Context excluded",
+    kind: selection ? `Selection${context.name ? ` · ${context.name}` : ""}` : "File",
+    name: documentNameFor(context),
+    tone: included ? "included" : "excluded"
+  };
+}
+
+function attachmentDisplayName(item) {
+  return item?.name || documentNameFor(item);
+}
+
+function filePathFromUri(uri) {
+  const value = String(uri || "");
+  if (!/^file:/i.test(value)) return "";
+  try {
+    const parsed = new URL(value);
+    const pathname = decodeURIComponent(parsed.pathname || "");
+    if (parsed.host) return `//${parsed.host}${pathname}`;
+    return /^\/[A-Za-z]:\//.test(pathname) ? pathname.slice(1) : pathname;
+  } catch {
+    return "";
+  }
+}
+
+function attachmentSelectionReference(item) {
+  if (item?.type !== "selection") return "";
+  if (Number.isInteger(item.startLine)) {
+    const start = item.startLine + 1;
+    const end = Number.isInteger(item.endLine) ? item.endLine + 1 : start;
+    return `${start}-${end}`;
+  }
+  const namedRange = String(item.name || "").match(/^Selected lines\s+(\d+)(?:-(\d+))?$/i);
+  if (namedRange) return `${namedRange[1]}-${namedRange[2] || namedRange[1]}`;
+  return "selection";
+}
+
+function attachmentTooltipPath(item) {
+  const uri = String(item?.uri || "");
+  const source = filePathFromUri(uri) || uri || String(item?.path || "") || attachmentDisplayName(item);
+  const selection = attachmentSelectionReference(item);
+  return selection ? `${source}#${selection}` : source;
+}
+
+function attachmentTooltipData(item) {
+  return {
+    name: attachmentTooltipPath(item),
+    variant: "attachment"
+  };
+}
+
+let richTooltipAnchor = null;
+let richTooltipHideTimer = null;
+
+function cancelRichTooltipHide() {
+  if (richTooltipHideTimer === null) return;
+  clearTimeout(richTooltipHideTimer);
+  richTooltipHideTimer = null;
+}
+
+function ensureRichTooltip() {
+  let tooltip = document.querySelector("#richTooltip");
+  if (tooltip) return tooltip;
+  tooltip = document.createElement("div");
+  tooltip.id = "richTooltip";
+  tooltip.className = "rich-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  tooltip.addEventListener("pointerenter", cancelRichTooltipHide);
+  tooltip.addEventListener("pointerleave", event => {
+    if (richTooltipAnchor && event.relatedTarget instanceof Node && richTooltipAnchor.contains(event.relatedTarget)) return;
+    scheduleRichTooltipHide(richTooltipAnchor);
+  });
+  document.body.appendChild(tooltip);
+  return tooltip;
+}
+
+function hideRichTooltip(anchor) {
+  cancelRichTooltipHide();
+  if (anchor && richTooltipAnchor !== anchor) return;
+  richTooltipAnchor = null;
+  const tooltip = document.querySelector("#richTooltip");
+  if (tooltip) tooltip.hidden = true;
+}
+
+function scheduleRichTooltipHide(anchor) {
+  cancelRichTooltipHide();
+  richTooltipHideTimer = setTimeout(() => hideRichTooltip(anchor), 90);
+}
+
+function showRichTooltip(anchor) {
+  if (!anchor?.dataset.richTooltip) return;
+  cancelRichTooltipHide();
+  const tooltip = ensureRichTooltip();
+  richTooltipAnchor = anchor;
+  const tone = anchor.dataset.tooltipTone || "";
+  const variant = anchor.dataset.tooltipVariant || "context";
+  const selectionText = anchor.id === "contextChip"
+    && state.editorContext?.type === "selection"
+    && typeof state.editorContext.text === "string"
+    && state.editorContext.text.length
+    ? state.editorContext.text
+    : "";
+  tooltip.className = `rich-tooltip ${variant === "attachment" ? "attachment-tooltip" : tone}${selectionText ? " has-selection" : ""}`;
+  tooltip.replaceChildren();
+
+  if (variant === "attachment") {
+    const attachmentName = document.createElement("span");
+    attachmentName.className = "attachment-tooltip-name";
+    attachmentName.textContent = anchor.dataset.tooltipName || "";
+    tooltip.appendChild(attachmentName);
+  } else {
+    const titleRow = document.createElement("div");
+    titleRow.className = "rich-tooltip-title-row";
+    if (tone === "included" || tone === "excluded") {
+      const statusIcon = document.createElement("span");
+      statusIcon.className = "rich-tooltip-status-icon";
+      statusIcon.innerHTML = tone === "included" ? icons.contextIncluded : icons.contextExcluded;
+      titleRow.appendChild(statusIcon);
+    }
+    const title = document.createElement("strong");
+    title.className = "rich-tooltip-title";
+    title.textContent = anchor.dataset.tooltipTitle || "";
+    titleRow.appendChild(title);
+    tooltip.appendChild(titleRow);
+    if (anchor.dataset.tooltipKind) {
+      const kind = document.createElement("span");
+      kind.className = "rich-tooltip-kind";
+      kind.textContent = anchor.dataset.tooltipKind;
+      tooltip.appendChild(kind);
+    }
+    const name = document.createElement("span");
+    name.className = "rich-tooltip-name";
+    name.textContent = anchor.dataset.tooltipName || "";
+    tooltip.appendChild(name);
+    if (selectionText) {
+      const selection = document.createElement("section");
+      selection.className = "rich-tooltip-selection";
+      const selectionHeader = document.createElement("div");
+      selectionHeader.className = "rich-tooltip-selection-header";
+      const selectionLabel = document.createElement("span");
+      selectionLabel.textContent = "Selected content";
+      const selectionDetail = document.createElement("span");
+      selectionDetail.textContent = `${selectionText.split(/\r\n|\r|\n/).length} lines · full content`;
+      selectionHeader.append(selectionLabel, selectionDetail);
+      const selectionContent = document.createElement("pre");
+      selectionContent.className = "rich-tooltip-selection-content";
+      selectionContent.tabIndex = 0;
+      selectionContent.setAttribute("aria-label", "Selected content");
+      selectionContent.textContent = selectionText;
+      selection.append(selectionHeader, selectionContent);
+      tooltip.appendChild(selection);
+    }
+  }
+
+  tooltip.hidden = false;
+  tooltip.style.left = "0px";
+  tooltip.style.top = "0px";
+  const anchorRect = anchor.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const margin = 8;
+  const left = Math.min(
+    Math.max(margin, anchorRect.left),
+    Math.max(margin, window.innerWidth - tooltipRect.width - margin)
+  );
+  const above = anchorRect.top - tooltipRect.height - margin;
+  const top = above >= margin
+    ? above
+    : Math.min(window.innerHeight - tooltipRect.height - margin, anchorRect.bottom + margin);
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.max(margin, Math.round(top))}px`;
 }
 
 function focusPromptAtEnd() {
@@ -461,14 +685,22 @@ function morphLiveNode(current, desired) {
 }
 
 function morphLiveChildren(current, desired) {
+  // Index the live children once: a per-child scan over childNodes is O(n^2)
+  // and streaming re-runs this for every chunk while the user is scrolling.
+  const keyed = new Map();
+  for (let node = current.firstChild; node; node = node.nextSibling) {
+    const key = liveKey(node);
+    if (key && !keyed.has(key)) keyed.set(key, node);
+  }
   let cursor = current.firstChild;
   for (const desiredChild of [...desired.childNodes]) {
     const key = liveKey(desiredChild);
     let match = key
-      ? [...current.childNodes].find(node => liveKey(node) === key)
+      ? keyed.get(key)
       : (cursor && !liveKey(cursor) && compatibleLiveNode(cursor, desiredChild) ? cursor : undefined);
     if (!match) {
       match = desiredChild.cloneNode(true);
+      if (key) keyed.set(key, match);
       current.insertBefore(match, cursor);
     } else {
       if (match !== cursor) current.insertBefore(match, cursor);
@@ -489,17 +721,32 @@ function reconcileConversationRegion(scrollEl, messages) {
   morphLiveChildren(scrollEl, desired);
 }
 
-function finishRenderedRegions(prevScrollTop, { forceSubmissionBottom = false } = {}) {
+// `restoreScroll` only belongs to render(), which rebuilds #app and therefore
+// drops the scroll offset. The streaming path morphs keyed nodes in place, so
+// the offset survives on its own and a restore would instead fight the user:
+// prevScrollTop is captured a frame before this runs, so writing it back
+// cancels whatever momentum scrolling happened in between — which is the
+// stutter when scrolling up mid-stream. Content growth above the viewport is
+// covered by the browser's default scroll anchoring.
+// `measureComposer` is likewise render-only: the composer markup is untouched
+// while streaming, and composerSizeObserver covers changes that do happen.
+function finishRenderedRegions(prevScrollTop, {
+  forceSubmissionBottom = false,
+  restoreScroll = false,
+  measureComposer = false
+} = {}) {
   updateQuestionOverflow();
   requestAnimationFrame(() => {
     const el = document.querySelector(".scroll");
     if (!el) return;
-    syncScrollPadding(el);
-    watchComposerSize();
-    const assistants = [...el.querySelectorAll(".assistant[data-message-id]")];
+    if (measureComposer) {
+      syncScrollPadding(el);
+      watchComposerSize();
+    }
+    const trackingNewRun = Number.isInteger(state.awaitingAssistantCount);
+    const assistants = trackingNewRun ? [...el.querySelectorAll(".assistant[data-message-id]")] : [];
     const latestAssistant = assistants[assistants.length - 1];
-    const newRunArrived = Number.isInteger(state.awaitingAssistantCount)
-      && assistants.length > state.awaitingAssistantCount;
+    const newRunArrived = trackingNewRun && assistants.length > state.awaitingAssistantCount;
     if (forceSubmissionBottom) {
       el.scrollTop = el.scrollHeight;
       state.awaitingAssistantCount = undefined;
@@ -507,8 +754,12 @@ function finishRenderedRegions(prevScrollTop, { forceSubmissionBottom = false } 
       latestAssistant.scrollIntoView({ block: "end" });
       state.awaitingAssistantCount = undefined;
       state.pinBottom = true;
-    } else {
-      el.scrollTop = state.pinBottom ? el.scrollHeight : prevScrollTop;
+    } else if (state.pinBottom) {
+      // Already pinned means the stream has nothing to correct; skipping the
+      // write keeps a smooth scroll (jump-to-latest) from being snapped.
+      if (el.scrollHeight - el.scrollTop - el.clientHeight > 1) el.scrollTop = el.scrollHeight;
+    } else if (restoreScroll) {
+      el.scrollTop = prevScrollTop;
     }
     syncRunningThinkingViewports();
     updateJumpToLatest();
@@ -516,6 +767,8 @@ function finishRenderedRegions(prevScrollTop, { forceSubmissionBottom = false } 
 }
 
 function render({ forceSubmissionBottom = false } = {}) {
+  hideRichTooltip();
+  forceSubmissionBottom = cancelScheduledLiveRegions() || forceSubmissionBottom;
   const { session, messages, running } = currentRenderState();
   const scrollEl = document.querySelector(".scroll");
   const prevScrollTop = scrollEl ? scrollEl.scrollTop : 0;
@@ -548,10 +801,11 @@ function render({ forceSubmissionBottom = false } = {}) {
   if (accessoryEl) accessoryEl._renderKey = accessoryRenderKey();
   autosizePrompt();
   if (state.commandOpen) renderCommandListOnly();
-  finishRenderedRegions(prevScrollTop, { forceSubmissionBottom });
+  finishRenderedRegions(prevScrollTop, { forceSubmissionBottom, restoreScroll: true, measureComposer: true });
 }
 
-function renderLiveRegions({ forceSubmissionBottom = false } = {}) {
+function renderLiveRegions({ forceSubmissionBottom = false, fromSchedule = false } = {}) {
+  if (!fromSchedule) forceSubmissionBottom = cancelScheduledLiveRegions() || forceSubmissionBottom;
   const scrollEl = document.querySelector("#conversationRegion");
   const accessoryEl = document.querySelector("#composerAccessories");
   if (!scrollEl || !accessoryEl) {
@@ -561,12 +815,38 @@ function renderLiveRegions({ forceSubmissionBottom = false } = {}) {
   const { session, messages } = currentRenderState();
   const prevScrollTop = scrollEl.scrollTop;
   reconcileConversationRegion(scrollEl, messages);
-  refreshAccessoryRegion(accessoryEl);
+  const accessoryChanged = refreshAccessoryRegion(accessoryEl);
   const titleText = document.querySelector("#titleBtn .title-text");
   if (titleText) titleText.innerHTML = renderedTitle(session);
   bindConversationRegion();
   updateSend();
-  finishRenderedRegions(prevScrollTop, { forceSubmissionBottom });
+  finishRenderedRegions(prevScrollTop, { forceSubmissionBottom, measureComposer: accessoryChanged });
+}
+
+// Hermes streams thinking deltas faster than the display refreshes. Coalescing
+// them onto one frame keeps the reconcile/layout cost at most once per frame
+// instead of once per chunk, which is what starves scrolling during long runs.
+let liveRenderFrame = 0;
+let liveRenderForceBottom = false;
+function scheduleLiveRegions({ forceSubmissionBottom = false } = {}) {
+  liveRenderForceBottom = liveRenderForceBottom || forceSubmissionBottom;
+  if (liveRenderFrame) return;
+  liveRenderFrame = requestAnimationFrame(() => {
+    liveRenderFrame = 0;
+    const force = liveRenderForceBottom;
+    liveRenderForceBottom = false;
+    renderLiveRegions({ forceSubmissionBottom: force, fromSchedule: true });
+  });
+}
+// A synchronous render supersedes any coalesced chunk, but a dropped
+// forceSubmissionBottom would lose a bottom transition, so carry it over.
+function cancelScheduledLiveRegions() {
+  if (!liveRenderFrame) return false;
+  cancelAnimationFrame(liveRenderFrame);
+  liveRenderFrame = 0;
+  const force = liveRenderForceBottom;
+  liveRenderForceBottom = false;
+  return force;
 }
 
 function renderAccessoriesOnly() {
@@ -585,13 +865,21 @@ function renderAccessoriesOnly() {
 
 function syncRunningThinkingViewports() {
   document.querySelectorAll(".step-content.thinking-step-running:not(.collapsed)").forEach(view => {
-    view.scrollTop = view.scrollHeight;
     const updateFade = () => {
       const overflow = view.scrollHeight > view.clientHeight + 1;
       view.classList.toggle("has-top-overflow", overflow && view.scrollTop > 1);
     };
+    // The viewport node survives streaming via its live key, so bind the fade
+    // listener once. Re-binding per chunk stacked thousands of copies, and
+    // every one of them forced a synchronous layout on each scroll event.
+    if (!view._fadeBindingReady) {
+      view._fadeBindingReady = true;
+      view.addEventListener("scroll", updateFade, { passive: true });
+    }
+    // Pin the thinking viewport to its newest line. The write is skipped when
+    // it already is, so a scroll in flight is not interrupted.
+    if (view.scrollTop + view.clientHeight < view.scrollHeight - 1) view.scrollTop = view.scrollHeight;
     updateFade();
-    view.addEventListener("scroll", updateFade, { passive: true });
   });
 }
 
@@ -607,18 +895,20 @@ let scrollHandlerBound = false;
 function bindScrollWatch() {
   if (scrollHandlerBound) return;
   scrollHandlerBound = true;
+  // Passive: a non-passive wheel listener forces every scroll in the webview
+  // onto the main thread, so it cannot be composited and stalls behind
+  // streaming renders. Nothing here needs preventDefault — the capped
+  // thinking viewport is overflow-y:hidden, so the browser natively routes the
+  // wheel to .scroll, its nearest scrollable ancestor.
   document.addEventListener("wheel", event => {
     const el = event.target?.closest?.(".scroll");
     if (!el) return;
-    if (event.target?.closest?.(".thinking-step-running")) {
-      event.preventDefault();
-      el.scrollTop += event.deltaY;
-    }
     if (event.deltaY >= 0) return;
     state.userScrolledUp = true;
     state.pinBottom = false;
+    state.suppressRepinUntil = Date.now() + 150;
     updateJumpToLatest();
-  }, { capture: true, passive: false });
+  }, { capture: true, passive: true });
   document.addEventListener("scroll", event => {
     if (state.modelPickerOpen || state.effortPickerOpen) positionOpenPicker();
     const el = event.target;
@@ -627,7 +917,7 @@ function bindScrollWatch() {
     if (!atBottom) {
       state.userScrolledUp = true;
       state.pinBottom = false;
-    } else if (state.running) {
+    } else if (state.running && Date.now() >= (state.suppressRepinUntil || 0)) {
       state.userScrolledUp = false;
       state.pinBottom = true;
     }
@@ -759,16 +1049,30 @@ function renderMemorySettings() {
     ["About you", "Personal context available to this agent", "USER.md"],
     ["Long-term memory", "Facts retained across conversations", "MEMORY.md"]
   ];
+  const platform = navigator.userAgentData?.platform || navigator.platform;
   return `<div class="memory-settings ${state.memoryOpen ? "open" : ""}" id="memorySettings">
     <section class="memory-card">
-      <h2>Personality & memory</h2>
-      <p>Edit the files that shape how this agent behaves and what it remembers.</p>
-      <div class="memory-list">
-        ${rows.map(([title, desc, file]) => `<button class="memory-row" type="button" data-file="${h(file)}">
-          <span><strong>${h(title)}</strong><small>${h(desc)}</small></span>
-          <code>${h(file)}</code>
-          ${icons.chevron}
-        </button>`).join("")}
+      <h2>Agent Setting</h2>
+      <div class="agent-setting-section">
+        <h3>Personality & Memory</h3>
+        <p>Edit the files that shape how this agent behaves and what it remembers.</p>
+        <div class="memory-list">
+          ${rows.map(([title, desc, file]) => `<button class="memory-row" type="button" data-file="${h(file)}">
+            <span><strong>${h(title)}</strong><small>${h(desc)}</small></span>
+            <code>${h(file)}</code>
+            ${icons.chevron}
+          </button>`).join("")}
+        </div>
+      </div>
+      <div class="agent-setting-section">
+        <h3>Keyboard Shortcuts</h3>
+        <label class="agent-setting-field" for="sendShortcutSelect">
+          <span>Send Shortcut</span>
+          <select id="sendShortcutSelect">
+            <option value="enter" ${state.settings.enterToSend !== false ? "selected" : ""}>Enter</option>
+            <option value="modified" ${state.settings.enterToSend === false ? "selected" : ""}>${modifiedSendShortcutLabel(platform)}</option>
+          </select>
+        </label>
       </div>
     </section>
   </div>`;
@@ -977,7 +1281,8 @@ function renderThinkingStep(step, messageId, index, thinking, running) {
 }
 
 function renderAttachment(item) {
-  return `<button class="attachment" type="button" title="${h(item.name)}" data-uri="${h(item.uri || "")}">${glyphFor(item.type)}<span class="attachment-name">${h(item.name)}</span></button>`;
+  const displayName = attachmentDisplayName(item);
+  return `<button class="attachment" type="button" ${richTooltipAttributes(attachmentTooltipData(item))} data-uri="${h(item.uri || "")}">${glyphFor(item.type)}<span class="attachment-name">${h(displayName)}</span></button>`;
 }
 
 function glyphFor(type) {
@@ -1004,7 +1309,7 @@ function renderPopovers() {
           <div class="settings-row modes-title"><span>Mode</span><span class="settings-value">${h(state.settings.mode)}</span></div>
           <div class="mode-picker">
             ${["Manual", "Auto"].map(mode => `<button class="approval-option ${state.settings.mode === mode ? "active" : ""}" data-mode="${mode}" type="button">
-              <span>${mode === "Manual" ? "✋" : "⚡"}</span>
+              <span class="mode-option-icon">${modeIcon(mode)}</span>
               <span><strong>${mode}</strong><span>${mode === "Manual" ? "Always ask for approval before making each edit." : "Only ask for approval when actions detected as potentially unsafe."}</span></span>
               <span>${state.settings.mode === mode ? "✓" : ""}</span>
             </button>`).join("")}
@@ -1257,7 +1562,7 @@ function renderTodosCapsule(plan) {
 function renderComposer(running) {
   const context = state.editorContext;
   const contextChip = context
-    ? `<button class="composer-chip ${state.contextMuted ? "muted" : ""}" id="contextChip" type="button" title="${state.contextMuted ? "Use context" : "Mute context"}" aria-label="${state.contextMuted ? "Use context" : "Mute context"}">${state.contextMuted ? icons.eyeOff : (context.type === "selection" ? icons.selection : icons.file)}<span>${h(context.name)}</span></button>`
+    ? `<button class="composer-chip ${state.contextMuted ? "muted" : ""}" id="contextChip" type="button" ${richTooltipAttributes(contextTooltipData(context))} aria-label="${state.contextMuted ? "Use context" : "Mute context"}">${state.contextMuted ? icons.eyeOff : (context.type === "selection" ? icons.selection : icons.file)}<span class="context-label">${h(context.name)}</span></button>`
     : "";
   const p = state.permission;
   const permissionActive = Boolean(p);
@@ -1335,8 +1640,9 @@ function renderPromptLine(running, contextChip) {
     <div class="input-line prompt" id="prompt" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="${placeholder}">${token ? `<span class="prompt-token" contenteditable="false" data-token-type="${h(token.type)}">${h(token.name)}</span> ` : ""}${h(state.draft)}</div>
     <div class="toolbar">
       <button class="tool-btn plus-btn" id="pickBtn" type="button" title="Add files or folders" aria-label="Add files or folders">${icons.add}</button>
-      <div class="context-strip">${contextChip}</div>
-      <button class="tool-btn" id="modeBtn" type="button" title="${h(settingsSummary.full)}"><span class="mode-label">${h(settingsSummary.compact)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
+      <div class="context-strip ${contextChip ? "has-context" : ""}">${contextChip}</div>
+      <span class="toolbar-spacer" aria-hidden="true"></span>
+      <button class="tool-btn" id="modeBtn" type="button" title="${h(settingsSummary.full)}"><span class="mode-icon">${modeIcon(state.settings.mode)}</span><span class="mode-label">${h(settingsSummary.compact)}</span>${icons.chevron.replace("<svg", '<svg class="dropdown-icon"')}</button>
       <button class="send ${running || canSubmit() ? "ready" : ""} ${running && !hasContent ? "stop" : ""}" id="sendBtn" type="button">${running && !hasContent ? icons.stop : icons.send}</button>
     </div>
   </div>`;
@@ -1601,6 +1907,11 @@ function bind() {
   document.querySelectorAll(".memory-row").forEach(row => {
     row.addEventListener("click", () => vscode.postMessage({ type: "openMemoryDoc", file: row.dataset.file }));
   });
+  document.querySelector("#sendShortcutSelect")?.addEventListener("change", event => {
+    state.settings.enterToSend = event.target.value === "enter";
+    settingsChanged();
+    render();
+  });
   document.querySelector("#newBtn")?.addEventListener("click", () => vscode.postMessage({ type: "newSession" }));
   document.querySelector("#historySearch")?.addEventListener("input", event => {
     state.historyQuery = event.target.value;
@@ -1640,7 +1951,7 @@ function bind() {
   });
   document.querySelectorAll(".approval-option").forEach(button => {
     button.addEventListener("click", () => {
-      state.settings.mode = button.dataset.mode;
+      if (button.dataset.mode) state.settings.mode = button.dataset.mode;
       state.settingsOpen = false;
       settingsChanged();
       render();
@@ -1785,7 +2096,8 @@ function bind() {
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    const platform = navigator.userAgentData?.platform || navigator.platform;
+    if (isSendShortcut(event, state.settings.enterToSend, platform)) {
       event.preventDefault();
       submit();
     }
@@ -1941,6 +2253,40 @@ document.addEventListener("click", event => {
   else if (accessoriesChanged) renderAccessoriesOnly();
 });
 
+document.addEventListener("pointerover", event => {
+  const anchor = event.target instanceof Element ? event.target.closest("[data-rich-tooltip]") : null;
+  if (!anchor || anchor === richTooltipAnchor) return;
+  showRichTooltip(anchor);
+});
+
+document.addEventListener("pointerout", event => {
+  const anchor = event.target instanceof Element ? event.target.closest("[data-rich-tooltip]") : null;
+  if (!anchor || (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget))) return;
+  const tooltip = document.querySelector("#richTooltip");
+  if (event.relatedTarget instanceof Node && tooltip?.contains(event.relatedTarget)) return;
+  scheduleRichTooltipHide(anchor);
+});
+
+document.addEventListener("focusin", event => {
+  const anchor = event.target instanceof Element ? event.target.closest("[data-rich-tooltip]") : null;
+  if (anchor) showRichTooltip(anchor);
+});
+
+document.addEventListener("focusout", event => {
+  const anchor = event.target instanceof Element ? event.target.closest("[data-rich-tooltip]") : null;
+  const tooltip = document.querySelector("#richTooltip");
+  if (anchor && event.relatedTarget instanceof Node && tooltip?.contains(event.relatedTarget)) return;
+  if (anchor) hideRichTooltip(anchor);
+  else if (tooltip?.contains(event.target) && !(event.relatedTarget instanceof Node && tooltip.contains(event.relatedTarget))) hideRichTooltip();
+});
+
+document.addEventListener("scroll", event => {
+  const tooltip = document.querySelector("#richTooltip");
+  if (event.target instanceof Node && tooltip?.contains(event.target)) return;
+  hideRichTooltip();
+}, true);
+window.addEventListener("resize", () => hideRichTooltip());
+
 function focusModelOption() {
   document.querySelector(`.model-option[data-model-index="${state.modelFocusIndex}"]`)?.scrollIntoView({ block: "nearest" });
 }
@@ -2022,7 +2368,7 @@ function selectReasoningEffort(modelId, effort) {
 function settingsChanged(reasoningEffort) {
   vscode.postMessage({
     type: "settingsChanged",
-    settings: { mode: state.settings.mode, model: state.settings.model, reasoningEffort }
+    settings: { mode: state.settings.mode, model: state.settings.model, reasoningEffort, enterToSend: state.settings.enterToSend !== false }
   });
 }
 
@@ -2127,7 +2473,12 @@ window.addEventListener("message", event => {
       state.permissionResolving = false;
       state.permissionDraft = "";
     }
+    const firstSessionLoad = !previousActiveSessionId && Boolean(state.activeSessionId);
     const sessionChanged = Boolean(previousActiveSessionId) && previousActiveSessionId !== state.activeSessionId;
+    if (firstSessionLoad || sessionChanged) {
+      state.userScrolledUp = false;
+      state.pinBottom = true;
+    }
     const permissionChanged = previousPermissionRequestId !== state.permission?.requestId;
     const needsFullRender = !document.querySelector("#conversationRegion")
       || sessionChanged
@@ -2141,10 +2492,10 @@ window.addEventListener("message", event => {
         delete state.renameOriginals[state.renamingSessionId];
         state.renamingSessionId = null;
       }
-      render({ forceSubmissionBottom });
+      render({ forceSubmissionBottom: forceSubmissionBottom || firstSessionLoad || sessionChanged });
       restoreRenameFocus(renameFocus);
     } else {
-      renderLiveRegions({ forceSubmissionBottom });
+      renderLiveRegions({ forceSubmissionBottom: forceSubmissionBottom || firstSessionLoad || sessionChanged });
     }
   }
   if (message.type === "editorContext") {
@@ -2173,19 +2524,19 @@ window.addEventListener("message", event => {
     const session = activeSession();
     const assistant = session.messages?.find(item => item.id === message.messageId);
     if (assistant) assistant.text += message.chunk;
-    renderLiveRegions();
+    scheduleLiveRegions();
   }
   if (message.type === "thinkingUpdate") {
     const session = activeSession();
     const assistant = session.messages?.find(item => item.id === message.messageId);
     if (assistant) assistant.thinking = message.thinking || [];
-    renderLiveRegions();
+    scheduleLiveRegions();
   }
   if (message.type === "planUpdate") {
     const session = activeSession();
     const assistant = session.messages?.find(item => item.id === message.messageId);
     if (assistant) assistant.plan = message.plan || [];
-    renderLiveRegions();
+    scheduleLiveRegions();
   }
   if (message.type === "focusInput") {
     document.querySelector("#prompt")?.focus();

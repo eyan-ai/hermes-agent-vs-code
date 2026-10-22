@@ -390,6 +390,7 @@ class BackgroundHost {
       cwd: input.cwd,
       env: { ...process.env, ...(input.env || {}) },
       shell: process.platform === "win32",
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.cliProcesses.set(run.runId, { child, run });
@@ -423,6 +424,9 @@ class BackgroundHost {
     const run = runId && this.runs.get(runId);
     const options = Array.isArray(request.params?.options) ? request.params.options : [];
     const allow = options.find(option => ["allow_once", "allow", "allow_session", "allow_always"].includes(option.optionId));
+    // Auto runs must never wait for an Extension Host connection. Hermes may
+    // still surface sensitive edits under its session policy, so resolve every
+    // request that carries an explicit allow option at the persistent host.
     if (run?.mode === "Auto" && allow) {
       client.respond(request.id, { outcome: { outcome: "selected", optionId: allow.optionId } });
       return;

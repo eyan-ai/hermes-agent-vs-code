@@ -21,6 +21,7 @@ const { markSessionCompleted, markSessionViewed, normalizeWorkspaceAgentState, r
 const { prepareDocumentReviewBatch } = require("./lib/document-review");
 const { projectV4aUpdatePreview } = require("./lib/v4a-preview");
 const { applyAutomaticTitle, applyManualTitle, inferTitleOrigin } = require("./lib/session-title");
+const { EditorContextResolver } = require("./lib/editor-context");
 
 const VIEW_ID = "hermesAgent.sidebar";
 const EDITOR_VIEW_TYPE = "hermesAgent.editorSession";
@@ -30,7 +31,7 @@ const WORKSPACE_AGENT_STATE_KEY = "hermesAgent.workspaceAgentState";
 const ACP_INITIALIZE_PARAMS = {
   protocolVersion: 1,
   clientCapabilities: {},
-  clientInfo: { name: "hermes-agent-vscode", version: "0.2.53" }
+  clientInfo: { name: "hermes-agent-vscode", version: "0.2.55" }
 };
 const FINAL_ANSWER_ONLY_PROMPT = `The task execution has ended, but no user-facing final answer was produced.
 
@@ -177,25 +178,24 @@ function activate(context) {
     vscode.commands.registerCommand("hermesAgent.focusInput", () => {
       provider.post({ type: "focusInput" });
     }),
-    vscode.window.onDidChangeActiveTextEditor(editor => {
-      // Track the last active document across focus changes (the webview
-      // steals focus when typing, so activeTextEditor goes undefined there).
-      if (editor && editor.document.uri.scheme !== "hermes-diff-preview") provider.lastActiveEditor = editor;
-      provider.refreshEditorContext();
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      void provider.refreshEditorContext();
       provider.ensureEditorIsolation();
     }),
-    vscode.window.tabGroups.onDidChangeTabs(() => provider.ensureEditorIsolation()),
-    vscode.window.tabGroups.onDidChangeTabGroups(() => provider.ensureEditorIsolation()),
-    // When every editor tab is closed, the default context must be cleared
-    // instead of pointing at a stale closed document. activeTextEditor can
-    // be undefined just from focus loss, so clear only on an actual close.
-    vscode.workspace.onDidCloseTextDocument(doc => {
-      if (provider.lastActiveEditor && provider.lastActiveEditor.document === doc) {
-        provider.lastActiveEditor = undefined;
-        provider.refreshEditorContext();
-      }
+    vscode.window.tabGroups.onDidChangeTabs(event => {
+      void provider.editorContextResolver.handleTabsChanged(event);
+      provider.ensureEditorIsolation();
     }),
-    vscode.window.onDidChangeTextEditorSelection(() => provider.refreshEditorContext()),
+    vscode.window.tabGroups.onDidChangeTabGroups(() => {
+      void provider.refreshEditorContext();
+      provider.ensureEditorIsolation();
+    }),
+    vscode.workspace.onDidCloseTextDocument(doc => {
+      provider.editorContextResolver.clearIfUri(doc.uri);
+      void provider.refreshEditorContext();
+    }),
+    vscode.workspace.onDidChangeTextDocument(() => void provider.refreshEditorContext()),
+    vscode.window.onDidChangeTextEditorSelection(() => void provider.refreshEditorContext()),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration("hermesAgent.nodePath")) provider.resetBackgroundNodeRuntime();
     }),
@@ -221,7 +221,12 @@ class HermesSidebarProvider {
     this.runningSessionIds = new Set(this.sessions.filter(sessionIsRunning).map(session => session.id));
     this.cliTurns = new Map();
     this.cliClient = undefined;
-    this.lastActiveEditor = vscode.window.activeTextEditor;
+    this.editorContextResolver = new EditorContextResolver({
+      vscode,
+      isHermesTab: tab => this.isHermesTab(tab),
+      onDidChange: contextValue => this.post({ type: "editorContext", context: contextValue }),
+      onError: error => console.warn(`Hermes editor context fallback: ${error.message || error}`)
+    });
     // ACP transport state (lazy): one shared `hermes acp` process for all
     // sessions; per-session mapping uiSession.id → acp session_id.
     this.acp = undefined;
@@ -262,6 +267,7 @@ class HermesSidebarProvider {
     this._ensureAcpPromise = undefined;
     this._nodeRuntimePromise = undefined;
     this._nodeRuntimeErrorKey = "";
+    void this.refreshEditorContext();
   }
 
   resolveWebviewView(view) {
@@ -453,20 +459,15 @@ class HermesSidebarProvider {
     session.settings = {
       mode: lastMode(this.context),
       model: lastModel(this.context, configuredModels.current),
-      reasoningByModel: lastReasoningByModel(this.context)
+      reasoningByModel: lastReasoningByModel(this.context),
+      enterToSend: lastEnterToSend(this.context)
     };
     this.sessions.unshift(session);
     if (activate) this.activeSessionId = session.id;
     if (panel) panel.sessionId = session.id;
     await this.saveSessions();
     if (activate) await this.saveWorkspaceAgentState();
-    // Surface the active document as default context immediately. If the
-    // last-active editor is stale (extension activated after the file was
-    // opened), pick up the currently focused editor as a fallback.
-    if (!this.lastActiveEditor && vscode.window.activeTextEditor) {
-      this.lastActiveEditor = vscode.window.activeTextEditor;
-    }
-    this.refreshEditorContext();
+    void this.refreshEditorContext();
     this.postState();
     return session;
   }
@@ -887,9 +888,11 @@ class HermesSidebarProvider {
         return false;
       }
     }
-    session.settings = { ...previous, mode, model: selectedModel, reasoningByModel };
+    const enterToSend = settings.enterToSend !== false;
+    session.settings = { ...previous, mode, model: selectedModel, reasoningByModel, enterToSend };
     if (session.modelState?.options?.length && selectedModel) session.modelState.current = selectedModel;
     saveLastMode(this.context, mode);
+    saveLastEnterToSend(this.context, enterToSend);
     if (selectedModel) saveLastModel(this.context, selectedModel);
     await saveLastReasoningByModel(this.context, reasoningByModel);
     await this.saveSessions();
@@ -1859,7 +1862,7 @@ class HermesSidebarProvider {
       cwd: this.workspaceCwd(),
       storageDir: vscode.Uri.joinPath(this.context.globalStorageUri, "background-host").fsPath,
       extensionRoot: this.context.extensionPath,
-      runtimeVersion: this.context.extension?.packageJSON?.version || "0.2.53",
+      runtimeVersion: this.context.extension?.packageJSON?.version || "0.2.55",
       resolveRuntime: () => this.backgroundNodeRuntime(),
       handlers: {
         onCliEvent: (runId, event) => this.handleCliEvent(runId, event),
@@ -1899,7 +1902,7 @@ class HermesSidebarProvider {
       cwd: this.workspaceCwd(),
       storageDir: vscode.Uri.joinPath(this.context.globalStorageUri, "background-host").fsPath,
       extensionRoot: this.context.extensionPath,
-      runtimeVersion: this.context.extension?.packageJSON?.version || "0.2.53",
+      runtimeVersion: this.context.extension?.packageJSON?.version || "0.2.55",
       resolveRuntime: () => this.backgroundNodeRuntime(),
       handlers: {
         onFinalAnswerOnly: (_runId, acpSessionId, afterSeq) => {
@@ -3192,6 +3195,7 @@ class HermesSidebarProvider {
       this.permissionBatchState.clear();
       this.pendingPermission = undefined;
       this.permissionQueue = [];
+      this.editorContextResolver.dispose();
       if (this._diffPreviewPromise) await this._diffPreviewPromise;
       const cleaned = await this.rollbackDocDiffPreview();
       if (!cleaned) this._diffPreview = undefined;
@@ -3446,7 +3450,7 @@ class HermesSidebarProvider {
   }
 
   refreshEditorContext() {
-    this.post({ type: "editorContext", context: this.getEditorContext() });
+    return this.editorContextResolver.refresh();
   }
 
   postState() {
@@ -3493,6 +3497,7 @@ class HermesSidebarProvider {
       sessions: this.sessions,
       settings: {
         mode: sessionSettings.mode || config.get("defaultMode", "Auto"),
+        enterToSend: sessionSettings.enterToSend !== false,
         model: selectedModel,
         reasoningByModel: sessionSettings.reasoningByModel || {},
         reasoningEffortSupported: Boolean(selectedModel),
@@ -3509,33 +3514,7 @@ class HermesSidebarProvider {
   }
 
   getEditorContext() {
-    // Use the last active document, not the focused one: the webview takes
-    // focus while typing, and activeTextEditor goes undefined there.
-    const editor = this.lastActiveEditor;
-    if (!editor) return null;
-    const doc = editor.document;
-    // Guard against a document that was closed but whose editor reference
-    // survived (e.g. reopened-then-closed tabs).
-    if (doc.isClosed) {
-      this.lastActiveEditor = undefined;
-      return null;
-    }
-    const selection = editor.selection;
-    if (!selection.isEmpty) {
-      return {
-        type: "selection",
-        name: `Selected lines ${selection.start.line + 1}-${selection.end.line + 1}`,
-        path: vscode.workspace.asRelativePath(doc.uri, false),
-        uri: doc.uri.toString(),
-        text: doc.getText(selection)
-      };
-    }
-    return {
-      type: "file",
-      name: path.basename(doc.uri.fsPath || doc.fileName),
-      path: vscode.workspace.asRelativePath(doc.uri, false),
-      uri: doc.uri.toString()
-    };
+    return this.editorContextResolver.current();
   }
 
   html(webview) {
@@ -3600,6 +3579,20 @@ function lastMode(ctx) {
 function saveLastMode(ctx, mode) {
   try {
     ctx.globalState.update(MODE_KEY, mode === "Manual" ? "Manual" : "Auto");
+  } catch { /* best-effort */ }
+}
+
+const ENTER_TO_SEND_KEY = "hermesAgent.lastEnterToSend";
+function lastEnterToSend(ctx) {
+  try {
+    return ctx.globalState.get(ENTER_TO_SEND_KEY, true) !== false;
+  } catch {
+    return true;
+  }
+}
+function saveLastEnterToSend(ctx, enterToSend) {
+  try {
+    ctx.globalState.update(ENTER_TO_SEND_KEY, enterToSend !== false);
   } catch { /* best-effort */ }
 }
 
@@ -3685,7 +3678,7 @@ function composeHermesPrompt(prompt, userMessage) {
     contextLines.push(`- current ${context.type || "file"}: ${context.path || context.name || context.uri}`);
     if (context.text) {
       contextLines.push("");
-      contextLines.push("Selected text:");
+      contextLines.push(context.textKind === "document" ? "Current unsaved document:" : "Selected text:");
       contextLines.push(context.text);
     }
   }
