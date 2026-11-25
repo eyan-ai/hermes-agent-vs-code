@@ -1528,10 +1528,14 @@ class HermesSidebarProvider {
           await this.failNodeRuntimeTurn(assistantMessage, err);
           return;
         }
-        // ACP failed (missing extra, protocol error, …) — surface once, then
-        // fall back to the CLI parser path so the extension still works.
-        assistantMessage.thinking.push({ kind: "error", title: "ACP unavailable", text: `${err.message || err}\nFalling back to CLI output parsing.` });
+        const message = `Hermes ACP request failed: ${err.message || err}`;
+        assistantMessage.status = "failed";
+        assistantMessage.finishedAt = Date.now();
+        assistantMessage.thinking.push({ kind: "error", title: "ACP request failed", text: message, finalized: true });
+        vscode.window.showErrorMessage(message);
+        await this.saveSessions();
         this.postState();
+        return;
       }
     }
     try {
@@ -1605,32 +1609,28 @@ class HermesSidebarProvider {
       if (lifecycle.cancelled) throw new TurnCancelledError();
       turn.acpSessionId = acpSessionId;
 
-      renderer = createAcpRenderer({ assistantMessage, post: msg => this.post(msg), session });
-      this.acpRenderers.set(acpSessionId, renderer);
-
       const settings = session.settings || {};
       const mode = settings.mode || "Auto";
-      const modelState = this.modelStateForSession(session);
-      const selectedModel = resolveSelectedModel(settings.model || lastModel(this.context), modelState.options, modelState.current);
-      if (selectedModel) {
-        session.settings = { ...settings, model: selectedModel };
-        const previousModel = modelState.current;
-        if (selectedModel !== previousModel) {
-          try {
-            await client.request("session/set_model", { sessionId: acpSessionId, modelId: selectedModel });
-            if (session.modelState?.options?.length) session.modelState.current = selectedModel;
-            saveLastModel(this.context, selectedModel);
-          } catch (error) {
-            session.settings.model = previousModel;
-            if (session.modelState?.options?.length) session.modelState.current = previousModel;
-            vscode.window.showWarningMessage(`Unable to apply the inherited Hermes model: ${error.message}`);
-          }
-        } else if (session.modelState?.options?.length) {
-          session.modelState.current = selectedModel;
+      const selectedModel = settings.model || lastModel(this.context);
+      // Reattach before submitting: the background process can outlive its ACP connection.
+      // Resume responses report the backend model; the picker caches the user's preference.
+      const resume = () => client.request("session/resume", {
+        cwd: this.workspaceCwd(), sessionId: acpSessionId, mcpServers: []
+      });
+      let snapshot = await resume();
+      const currentModel = () => snapshot.models?.currentModelId || snapshot.models?.current_model_id;
+      if (selectedModel && currentModel() !== selectedModel) {
+        await client.request("session/set_model", { sessionId: acpSessionId, modelId: selectedModel });
+        snapshot = await resume();
+        if (currentModel() !== selectedModel) {
+          throw new Error(`Expected model ${selectedModel}; Hermes reported ${currentModel() || "unknown"}.`);
         }
-        await this.saveSessions();
-        this.postState();
       }
+      this.applyAcpSessionState(session, acpSessionId, snapshot.models, snapshot.configOptions);
+      if (lifecycle.cancelled) throw new TurnCancelledError();
+      // A resume may replay old messages. Attach the turn renderer after the replay.
+      renderer = createAcpRenderer({ assistantMessage, post: msg => this.post(msg), session });
+      this.acpRenderers.set(acpSessionId, renderer);
       try {
         await client.request("session/set_mode", {
           sessionId: acpSessionId,
