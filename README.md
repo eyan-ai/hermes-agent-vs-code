@@ -30,6 +30,8 @@ Start a clean session directly from the editor whenever a task needs a fresh con
 
 Active Auto-mode tasks can continue in a standalone background host after VS Code closes. Reopening the same workspace restores the previous Agent workspace and session, including structured Thinking, Actions, and the final response. History shows running sessions and marks completed sessions that have not yet been viewed.
 
+To cancel tasks when their originating window closes or reloads, enable `hermesAgent.cancelOnWindowClose` before starting the task. Other windows can continue running their own tasks.
+
 This capability requires a standalone Node.js installation. The extension can detect Node.js automatically, or you can set an explicit executable with `hermesAgent.nodePath`. Closing the computer, signing out of the operating system, or terminating the standalone Node.js process stops the background session.
 
 ## Feature overview

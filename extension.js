@@ -1857,6 +1857,7 @@ class HermesSidebarProvider {
     if (this.cliClient) return this.cliClient;
     let client;
     client = new BackgroundClient({
+      shouldCancelOnClose: () => vscode.workspace.getConfiguration("hermesAgent").get("cancelOnWindowClose", false),
       command,
       args: [],
       cwd: this.workspaceCwd(),
@@ -1897,6 +1898,7 @@ class HermesSidebarProvider {
 
   async startAcpClient(command) {
     const client = new BackgroundClient({
+      shouldCancelOnClose: () => vscode.workspace.getConfiguration("hermesAgent").get("cancelOnWindowClose", false),
       command,
       args: ["acp"],
       cwd: this.workspaceCwd(),

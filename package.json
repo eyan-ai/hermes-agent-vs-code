@@ -97,6 +97,11 @@
           "scope": "machine",
           "description": "Arguments passed to hermesAgent.command (CLI fallback mode only). Use {{prompt}} where the composed prompt should be inserted. Default uses `hermes chat -q -v` so reasoning steps and tool calls stream into the sidebar; plain `--oneshot` output still works as a fallback."
         },
+        "hermesAgent.cancelOnWindowClose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Cancel tasks submitted by this window when its connection to the background host closes, including on window reload."
+        },
         "hermesAgent.nodePath": {
           "type": "string",
           "default": "",
