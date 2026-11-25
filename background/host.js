@@ -272,13 +272,21 @@ class BackgroundHost {
         }));
         await this._persist();
       }
+      const cancelWithWindow = message.cancelOnClose === true && message.method === "session/prompt";
+      const ownerClosed = () => cancelWithWindow && connection.socket.destroyed;
+      const cancelOnClose = () => client.notify("session/cancel", { sessionId: params.sessionId });
       try {
+        if (cancelWithWindow) {
+          if (ownerClosed()) throw new Error("Editor disconnected before prompt submission");
+          connection.socket.once("close", cancelOnClose);
+        }
         let result = await client.request(message.method, params);
         if (message.method === "initialize") this.initializeResult = result;
         if (run) {
-          const status = result?.stopReason === "refusal" ? "failed" : "done";
+          let status = result?.stopReason === "refusal" ? "failed" : "done";
+          if (ownerClosed() || result?.stopReason === "cancelled") status = "interrupted";
           const renderer = this.acpRunRenderers.get(run.runId);
-          const finalization = renderer?.finalize(status);
+          const finalization = renderer?.finalize(status === "interrupted" ? "stopped" : status);
           if (status === "done" && finalization?.needsFinalAnswer && metadata.finalAnswerPrompt) {
             run.finalAnswerSeq = run.seq;
             await this._persist();
@@ -290,6 +298,7 @@ class BackgroundHost {
             });
             renderer.beginFinalAnswerOnly();
             try {
+              if (ownerClosed()) throw new Error("Editor disconnected");
               const finalResult = await client.request("session/prompt", {
                 sessionId: run.acpSessionId,
                 prompt: [{ type: "text", text: metadata.finalAnswerPrompt }]
@@ -301,7 +310,7 @@ class BackgroundHost {
             renderer.finalize("done");
           }
           result = { ...(result || {}), _backgroundFinalAnswerHandled: true };
-          run.status = status;
+          run.status = ownerClosed() ? "interrupted" : status;
           run.result = result;
           run.completedAt = Date.now();
           this.activeRunBySession.delete(run.acpSessionId);
@@ -312,7 +321,7 @@ class BackgroundHost {
         this._send(connection, { type: "response", id: message.id, result });
       } catch (error) {
         if (run) {
-          run.status = "failed";
+          run.status = ownerClosed() ? "interrupted" : "failed";
           run.error = error.message;
           run.completedAt = Date.now();
           this.activeRunBySession.delete(run.acpSessionId);
@@ -322,6 +331,7 @@ class BackgroundHost {
         }
         this._send(connection, { type: "response", id: message.id, error: error.message });
       } finally {
+        if (cancelWithWindow) connection.socket.off("close", cancelOnClose);
         this._scheduleIdleExit();
       }
       return;
@@ -386,6 +396,12 @@ class BackgroundHost {
     };
     this.runs.set(run.runId, run);
     await this._persist();
+    if (message.cancelOnClose && connection.socket.destroyed) {
+      run.status = "interrupted";
+      run.completedAt = Date.now();
+      await this._persist();
+      return;
+    }
     const child = require("child_process").spawn(input.command, input.args || [], {
       cwd: input.cwd,
       env: { ...process.env, ...(input.env || {}) },
@@ -394,6 +410,8 @@ class BackgroundHost {
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.cliProcesses.set(run.runId, { child, run });
+    const cancelOnClose = () => this._terminateCliChild(child);
+    if (message.cancelOnClose) connection.socket.once("close", cancelOnClose);
     const append = (kind, chunk) => {
       run.seq += 1;
       const event = { seq: run.seq, kind, chunk: String(chunk) };
@@ -405,8 +423,9 @@ class BackgroundHost {
     child.stderr.on("data", chunk => append("stderr", chunk));
     child.on("error", error => append("error", error.message));
     child.on("close", async (code, signal) => {
+      connection.socket.off("close", cancelOnClose);
       this.cliProcesses.delete(run.runId);
-      run.status = signal ? "interrupted" : code === 0 ? "done" : "failed";
+      run.status = signal || (message.cancelOnClose && connection.socket.destroyed) ? "interrupted" : code === 0 ? "done" : "failed";
       run.exitCode = code;
       run.signal = signal;
       run.completedAt = Date.now();
